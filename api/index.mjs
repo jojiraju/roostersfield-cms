@@ -6773,12 +6773,49 @@ function ledgerBatch(f, batches, farms) {
   }
   return { farm, batch: best };
 }
-function ledgerCheck(f, days, batches, farms, through) {
+async function ledgerTotals(through) {
+  const upTo = through ? "AND e.date <= ?" : "";
+  const args = through ? [through] : [];
+  const out = /* @__PURE__ */ new Map();
+  const at = (id2) => {
+    let t = out.get(id2);
+    if (!t) {
+      t = { birds: 0, kg: 0, bags: 0 };
+      out.set(id2, t);
+    }
+    return t;
+  };
+  const sales = await all(
+    `SELECT e.batch_id,
+            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) birds,
+            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.weight,0) ELSE -COALESCE(e.weight,0) END) kg
+       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='sales'
+      WHERE e.batch_id IS NOT NULL ${upTo} GROUP BY e.batch_id`,
+    ...args
+  );
+  for (const r of sales) {
+    const t = at(r.batch_id);
+    t.birds = r.birds;
+    t.kg = round2(r.kg);
+  }
+  const feed = await all(
+    `SELECT e.batch_id, SUM(CASE WHEN e.debit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) bags
+       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='wip'
+      WHERE e.batch_id IS NOT NULL AND e.category IN ('feed','feed_return') ${upTo} GROUP BY e.batch_id`,
+    ...args
+  );
+  for (const r of feed) at(r.batch_id).bags = round2(r.bags);
+  return out;
+}
+function ledgerCheck(f, days, batches, totals, farms, through) {
   const { farm, batch } = ledgerBatch(f, batches, farms);
   const upTo = days.filter((d2) => !through || d2.date <= through);
   const daily = { birds: upTo.reduce((s, d2) => s + d2.sale_qty, 0), kg: upTo.reduce((s, d2) => s + d2.sale_kg, 0), bags: upTo.reduce((s, d2) => s + d2.feed_in, 0) };
-  if (!batch) return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: [farm ? "No batch in the accounts for this placement" : "No farm in the accounts with this name"] };
-  const ledger2 = { birds: batch.soldBirds, kg: batch.soldKg, bags: batch.feedBags };
+  if (!batch) {
+    const tooNew = !!farm && !!through && f.placement_date > through;
+    return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: tooNew ? [] : [farm ? "No batch in the accounts for this placement" : "No farm in the accounts with this name"] };
+  }
+  const ledger2 = totals.get(batch.id) ?? { birds: 0, kg: 0, bags: 0 };
   const differs = [];
   if (f.placed_qty !== null && batch.placed_qty !== null && Math.abs(f.placed_qty - batch.placed_qty) >= 1) differs.push("placed");
   if (batch.placed_qty === null) differs.push("placed");
@@ -6805,6 +6842,7 @@ async function dailyReport(requestedDate) {
   const latest = rows.reduce((m, r) => running.has(r.flock_id) && r.date <= now && (!m || r.date > m) ? r.date : m, null);
   const asOf = requestedDate ?? latest ?? now;
   const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
+  const totals = await ledgerTotals(through);
   return {
     asOf,
     today: now,
@@ -6812,7 +6850,7 @@ async function dailyReport(requestedDate) {
     bagKg,
     flocks: flocks.map((f) => {
       const days = byFlock.get(f.id) ?? [];
-      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d2) => d2.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through) };
+      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d2) => d2.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, totals, farms, through) };
     })
   };
 }
@@ -6823,7 +6861,7 @@ async function flockDetail(id2) {
   const days = await flockDays(id2);
   const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
   const chart = feedChart(f.placement_date, f.gross_qty, days, bagKg);
-  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through), days, chart };
+  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, await ledgerTotals(through), farms, through), days, chart };
 }
 async function createFlock(d2) {
   if (await get("SELECT 1 FROM flocks WHERE name=? AND placement_date=?", d2.name, d2.placementDate)) throw badRequest(`${d2.name} already has a flock placed on that date`);

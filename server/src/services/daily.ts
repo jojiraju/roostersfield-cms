@@ -1,6 +1,6 @@
 import { all, get, getSetting, run } from '../db.ts';
 import { badRequest, notFound } from '../errors.ts';
-import { today } from '../util.ts';
+import { round2, today } from '../util.ts';
 import { listBatches } from './batches.ts';
 import { feedChart, flockIssues, flockMetrics } from './flockMetrics.ts';
 import type { FlockDay } from './flockMetrics.ts';
@@ -37,13 +37,43 @@ function ledgerBatch(f: FlockRow, batches: BatchList, farms: string[]) {
   return { farm, batch: best };
 }
 
-/** Compares the daily sheet with the accounts, counting only the days the accounts have reached. */
-function ledgerCheck(f: FlockRow, days: FlockDay[], batches: BatchList, farms: string[], through: string | null) {
+type LedgerTotals = Map<number, { birds: number; kg: number; bags: number }>;
+
+/**
+ * Birds, kg and feed bags per batch in the accounts, up to the cutoff.
+ * Bills entered in the app after the last import are left out, so both sides of the comparison cover the same days.
+ */
+async function ledgerTotals(through: string | null): Promise<LedgerTotals> {
+  const upTo = through ? 'AND e.date <= ?' : '';
+  const args = through ? [through] : [];
+  const out: LedgerTotals = new Map();
+  const at = (id: number) => { let t = out.get(id); if (!t) { t = { birds: 0, kg: 0, bags: 0 }; out.set(id, t); } return t; };
+  const sales = await all<{ batch_id: number; birds: number; kg: number }>(
+    `SELECT e.batch_id,
+            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) birds,
+            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.weight,0) ELSE -COALESCE(e.weight,0) END) kg
+       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='sales'
+      WHERE e.batch_id IS NOT NULL ${upTo} GROUP BY e.batch_id`, ...args);
+  for (const r of sales) { const t = at(r.batch_id); t.birds = r.birds; t.kg = round2(r.kg); }
+  const feed = await all<{ batch_id: number; bags: number }>(
+    `SELECT e.batch_id, SUM(CASE WHEN e.debit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) bags
+       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='wip'
+      WHERE e.batch_id IS NOT NULL AND e.category IN ('feed','feed_return') ${upTo} GROUP BY e.batch_id`, ...args);
+  for (const r of feed) at(r.batch_id).bags = round2(r.bags);
+  return out;
+}
+
+/** Compares the daily sheet with the accounts, counting only the days the accounts have reached on both sides. */
+function ledgerCheck(f: FlockRow, days: FlockDay[], batches: BatchList, totals: LedgerTotals, farms: string[], through: string | null) {
   const { farm, batch } = ledgerBatch(f, batches, farms);
   const upTo = days.filter((d) => !through || d.date <= through);
   const daily = { birds: upTo.reduce((s, d) => s + d.sale_qty, 0), kg: upTo.reduce((s, d) => s + d.sale_kg, 0), bags: upTo.reduce((s, d) => s + d.feed_in, 0) };
-  if (!batch) return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: [farm ? 'No batch in the accounts for this placement' : 'No farm in the accounts with this name'] };
-  const ledger = { birds: batch.soldBirds, kg: batch.soldKg, bags: batch.feedBags };
+  if (!batch) {
+    // Placed after the accounts stop: there can't be a batch yet, so this isn't a difference.
+    const tooNew = !!farm && !!through && f.placement_date > through;
+    return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: tooNew ? [] : [farm ? 'No batch in the accounts for this placement' : 'No farm in the accounts with this name'] };
+  }
+  const ledger = totals.get(batch.id) ?? { birds: 0, kg: 0, bags: 0 };
   const differs: string[] = [];
   if (f.placed_qty !== null && batch.placed_qty !== null && Math.abs(f.placed_qty - batch.placed_qty) >= 1) differs.push('placed');
   if (batch.placed_qty === null) differs.push('placed');
@@ -54,7 +84,7 @@ function ledgerCheck(f: FlockRow, days: FlockDay[], batches: BatchList, farms: s
 }
 
 const bagSize = async () => Number(await getSetting('feed_bag_kg', '50')) || 50;
-/** The last date the imported accounts run to; later sales and feed simply have not reached the books yet. */
+/** The last date the imported accounts run to. Both sides of the check stop here until the next accounts import moves it on. */
 const ledgerThrough = async () => (await get<{ d: string | null }>(`SELECT MAX(date) d FROM vouchers WHERE source='import'`))?.d ?? null;
 const farmNames = async () => (await all<{ name: string }>('SELECT name FROM farms')).map((f) => f.name);
 const flockDays = (id: number) => all<DayRow>('SELECT * FROM flock_days WHERE flock_id=? ORDER BY date', id);
@@ -70,11 +100,12 @@ export async function dailyReport(requestedDate?: string) {
   const latest = rows.reduce<string | null>((m, r) => (running.has(r.flock_id) && r.date <= now && (!m || r.date > m) ? r.date : m), null);
   const asOf = requestedDate ?? latest ?? now;
   const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
+  const totals = await ledgerTotals(through);
   return {
     asOf, today: now, ledgerThrough: through, bagKg,
     flocks: flocks.map((f) => {
       const days = byFlock.get(f.id) ?? [];
-      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d) => d.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through) };
+      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d) => d.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, totals, farms, through) };
     }),
   };
 }
@@ -86,7 +117,7 @@ export async function flockDetail(id: number) {
   const days = await flockDays(id);
   const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
   const chart = feedChart(f.placement_date, f.gross_qty, days, bagKg);
-  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through), days, chart };
+  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, await ledgerTotals(through), farms, through), days, chart };
 }
 
 export async function createFlock(d: { name: string; placementDate: string; placedQty: number; grossQty: number; notes?: string | null }) {

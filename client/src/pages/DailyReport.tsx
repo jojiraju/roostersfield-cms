@@ -238,7 +238,7 @@ function CheckTab({ flocks, through, open }: { flocks: Flock[]; through: string 
       </Card>
       <Card pad={false} flush>
         <CardHead title="Daily report against the accounts" icon="scale" />
-        <div className="card-body small muted" style={{ paddingTop: 0 }}>Top figure: daily report. Lower figure: accounts. Only days up to {fmtDate(through)} are counted, because the accounts stop there.</div>
+        <div className="card-body small muted" style={{ paddingTop: 0 }}>Top figure: daily report. Lower figure: accounts. Both count only days up to {fmtDate(through)}, the last date in the imported accounts. Bills entered in the app after that are left out, and flocks placed after that are not listed.</div>
         <Table rows={diffs} rowKey={(f) => f.id} onRowClick={open} empty={<Empty title="Everything agrees" icon="check" />}
           cols={[
             { key: 'farm', header: 'Flock', render: (f) => <><b>{f.name}</b><span className="sub">{fmtDate(f.placement_date)}{f.check.batchNo ? ` · batch #${f.check.batchNo}` : ''}</span></> },
