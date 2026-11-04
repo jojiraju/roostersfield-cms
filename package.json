@@ -1,0 +1,21 @@
+{
+  "name": "roosters-field",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Rooster's Field Edakkara \u2014 poultry integration management (farms, batches, feed, sales, accounts)",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "import": "npm run import -w server --",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
+    "build:vercel": "npm run build -w client && npm run build:api -w server"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

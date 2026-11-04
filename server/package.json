@@ -1,0 +1,27 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "node --watch --disable-warning=ExperimentalWarning src/index.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "import": "node --disable-warning=ExperimentalWarning src/importer/cli.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test src/**/*.test.ts",
+    "build:api": "node scripts/build-api.mjs"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.8.3",
+    "esbuild": "^0.25.0"
+  }
+}
