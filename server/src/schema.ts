@@ -111,4 +111,33 @@ CREATE TABLE IF NOT EXISTS cash_counts (
   updated_by INTEGER REFERENCES users(id),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Day-by-day flock records (the farm tabs of the DAILY REPORT workbook). Kept apart from the ledger on purpose:
+-- no money moves here, and re-importing the JOURNALS sheet (which rebuilds farms and batches) leaves these alone.
+-- A flock finds its farm and batch by name and placement date when it is read, so there is no foreign key to them.
+CREATE TABLE IF NOT EXISTS flocks (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE,
+  placement_date TEXT NOT NULL,
+  placed_qty REAL,              -- chicks billed
+  gross_qty REAL NOT NULL,      -- chicks counted, including the hatchery's extra (usually +2%)
+  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','closed')),
+  source TEXT NOT NULL DEFAULT 'app',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (name, placement_date)
+);
+
+CREATE TABLE IF NOT EXISTS flock_days (
+  flock_id INTEGER NOT NULL REFERENCES flocks(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  mortality REAL NOT NULL DEFAULT 0,
+  sale_qty REAL NOT NULL DEFAULT 0,
+  sale_kg REAL NOT NULL DEFAULT 0,
+  feed_in REAL NOT NULL DEFAULT 0,    -- bags received (negative = returned or moved out)
+  feed_used REAL NOT NULL DEFAULT 0,  -- bags taken
+  avg_weight_g REAL,                  -- weighed sample, when one was taken
+  source TEXT NOT NULL DEFAULT 'app',
+  PRIMARY KEY (flock_id, date)
+);
 `;

@@ -133,8 +133,19 @@ function DataCard() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState('');
+  const dailyFile = useRef<HTMLInputElement>(null);
+  const [dailyBusy, setDailyBusy] = useState(false);
+  const [dailyResult, setDailyResult] = useState<any>(null);
+  const [dailyErr, setDailyErr] = useState('');
   const s = stats.data;
 
+  const uploadDaily = async (f: File) => {
+    setDailyBusy(true); setDailyErr(''); setDailyResult(null);
+    try {
+      setDailyResult(await api('/import/daily-report', { method: 'POST', raw: await f.arrayBuffer() }));
+      clearCache(); toast('Daily report imported');
+    } catch (e) { setDailyErr((e as Error).message); } finally { setDailyBusy(false); if (dailyFile.current) dailyFile.current.value = ''; }
+  };
   const upload = async (f: File) => {
     setBusy(true); setErr(''); setResult(null);
     try {
@@ -159,6 +170,13 @@ function DataCard() {
         <Button icon="upload" loading={busy} onClick={() => file.current?.click()} disabled={!!s && s.vouchers > 0 && !replace}>Choose Excel file</Button>
         {err && <div className="form-error mt-12">{err}</div>}
         {result && <div className="mt-12"><Alert tone="ok">Imported {num(result.vouchers ?? 0)} entries{result.farms !== undefined ? `, ${num(result.farms)} farms` : ''}{result.batches !== undefined ? `, ${num(result.batches)} batches` : ''}.{result.warnings?.length ? ` ${result.warnings.length} notes — see below.` : ''}</Alert>{result.warnings?.length > 0 && <ul className="small muted" style={{ maxHeight: 140, overflow: 'auto' }}>{result.warnings.slice(0, 30).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul>}</div>}
+        <hr style={{ border: 0, borderTop: '1px solid var(--line-soft)', margin: '18px 0' }} />
+        <b>Import daily report</b>
+        <div className="small muted mb-8">Upload the daily report workbook (.xlsx) with the farm tabs. The accounts are not changed. For a date in both, the workbook replaces what is here.</div>
+        <input ref={dailyFile} type="file" accept=".xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && uploadDaily(e.target.files[0])} />
+        <Button icon="upload" loading={dailyBusy} onClick={() => dailyFile.current?.click()}>Choose daily report</Button>
+        {dailyErr && <div className="form-error mt-12">{dailyErr}</div>}
+        {dailyResult && <div className="mt-12"><Alert tone="ok">Imported {num(dailyResult.flocks)} flocks and {num(dailyResult.days)} days, up to {fmtDate(dailyResult.asOf)}.{dailyResult.skipped?.length ? ` Skipped: ${dailyResult.skipped.join('; ')}.` : ''}</Alert></div>}
       </div>
     </Card>
   );

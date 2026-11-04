@@ -9,6 +9,7 @@ import Dashboard from './pages/Dashboard';
 import Batches from './pages/Batches';
 import BatchDetail from './pages/BatchDetail';
 import Farms from './pages/Farms';
+import DailyReport, { FlockDetail } from './pages/DailyReport';
 import { BillForm, BillView, SalesList } from './pages/Sales';
 import Transactions from './pages/Transactions';
 import CashBook from './pages/CashBook';
@@ -27,6 +28,8 @@ export default function App() {
           { path: '/', element: <Dashboard /> },
           { path: '/batches', element: <Batches /> },
           { path: '/batches/:id', element: <BatchDetail /> },
+          { path: '/daily', element: <DailyReport /> },
+          { path: '/daily/:id', element: <FlockDetail /> },
           { path: '/farms', element: <Farms /> },
           { path: '/sales', element: <SalesList /> },
           { path: '/sales/new', element: <BillForm /> },

@@ -9,7 +9,7 @@ var __export = (target, all2) => {
 import fs from "node:fs";
 import path2 from "node:path";
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/external.js
+// ../node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -121,7 +121,7 @@ __export(external_exports, {
   void: () => voidType
 });
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/util.js
+// ../node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {
@@ -155,9 +155,9 @@ var util;
   };
   util2.objectKeys = typeof Object.keys === "function" ? (obj) => Object.keys(obj) : (object) => {
     const keys = [];
-    for (const key2 in object) {
-      if (Object.prototype.hasOwnProperty.call(object, key2)) {
-        keys.push(key2);
+    for (const key3 in object) {
+      if (Object.prototype.hasOwnProperty.call(object, key3)) {
+        keys.push(key3);
       }
     }
     return keys;
@@ -255,7 +255,7 @@ var getParsedType = (data) => {
   }
 };
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/ZodError.js
+// ../node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -373,7 +373,7 @@ ZodError.create = (issues) => {
   return error;
 };
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/locales/en.js
+// ../node_modules/zod/v3/locales/en.js
 var errorMap = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -476,7 +476,7 @@ var errorMap = (issue, _ctx) => {
 };
 var en_default = errorMap;
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/errors.js
+// ../node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -485,7 +485,7 @@ function getErrorMap() {
   return overrideErrorMap;
 }
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/parseUtil.js
+// ../node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path: path5, errorMaps, issueData } = params;
   const fullPath = [...path5, ...issueData.path || []];
@@ -557,10 +557,10 @@ var ParseStatus = class _ParseStatus {
   static async mergeObjectAsync(status, pairs) {
     const syncPairs = [];
     for (const pair of pairs) {
-      const key2 = await pair.key;
+      const key3 = await pair.key;
       const value = await pair.value;
       syncPairs.push({
-        key: key2,
+        key: key3,
         value
       });
     }
@@ -569,17 +569,17 @@ var ParseStatus = class _ParseStatus {
   static mergeObjectSync(status, pairs) {
     const finalObject = {};
     for (const pair of pairs) {
-      const { key: key2, value } = pair;
-      if (key2.status === "aborted")
+      const { key: key3, value } = pair;
+      if (key3.status === "aborted")
         return INVALID;
       if (value.status === "aborted")
         return INVALID;
-      if (key2.status === "dirty")
+      if (key3.status === "dirty")
         status.dirty();
       if (value.status === "dirty")
         status.dirty();
-      if (key2.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
-        finalObject[key2.value] = value.value;
+      if (key3.value !== "__proto__" && (typeof value.value !== "undefined" || pair.alwaysSet)) {
+        finalObject[key3.value] = value.value;
       }
     }
     return { status: status.value, value: finalObject };
@@ -595,21 +595,21 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/errorUtil.js
+// ../node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/types.js
+// ../node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path5, key2) {
+  constructor(parent, value, path5, key3) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
     this._path = path5;
-    this._key = key2;
+    this._key = key3;
   }
   get path() {
     if (!this._cachedPath.length) {
@@ -2354,9 +2354,9 @@ ZodArray.create = (schema, params) => {
 function deepPartialify(schema) {
   if (schema instanceof ZodObject) {
     const newShape = {};
-    for (const key2 in schema.shape) {
-      const fieldSchema = schema.shape[key2];
-      newShape[key2] = ZodOptional.create(deepPartialify(fieldSchema));
+    for (const key3 in schema.shape) {
+      const fieldSchema = schema.shape[key3];
+      newShape[key3] = ZodOptional.create(deepPartialify(fieldSchema));
     }
     return new ZodObject({
       ...schema._def,
@@ -2407,29 +2407,29 @@ var ZodObject = class _ZodObject extends ZodType {
     const { shape, keys: shapeKeys } = this._getCached();
     const extraKeys = [];
     if (!(this._def.catchall instanceof ZodNever && this._def.unknownKeys === "strip")) {
-      for (const key2 in ctx.data) {
-        if (!shapeKeys.includes(key2)) {
-          extraKeys.push(key2);
+      for (const key3 in ctx.data) {
+        if (!shapeKeys.includes(key3)) {
+          extraKeys.push(key3);
         }
       }
     }
     const pairs = [];
-    for (const key2 of shapeKeys) {
-      const keyValidator = shape[key2];
-      const value = ctx.data[key2];
+    for (const key3 of shapeKeys) {
+      const keyValidator = shape[key3];
+      const value = ctx.data[key3];
       pairs.push({
-        key: { status: "valid", value: key2 },
-        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key2)),
-        alwaysSet: key2 in ctx.data
+        key: { status: "valid", value: key3 },
+        value: keyValidator._parse(new ParseInputLazyPath(ctx, value, ctx.path, key3)),
+        alwaysSet: key3 in ctx.data
       });
     }
     if (this._def.catchall instanceof ZodNever) {
       const unknownKeys = this._def.unknownKeys;
       if (unknownKeys === "passthrough") {
-        for (const key2 of extraKeys) {
+        for (const key3 of extraKeys) {
           pairs.push({
-            key: { status: "valid", value: key2 },
-            value: { status: "valid", value: ctx.data[key2] }
+            key: { status: "valid", value: key3 },
+            value: { status: "valid", value: ctx.data[key3] }
           });
         }
       } else if (unknownKeys === "strict") {
@@ -2446,15 +2446,15 @@ var ZodObject = class _ZodObject extends ZodType {
       }
     } else {
       const catchall = this._def.catchall;
-      for (const key2 of extraKeys) {
-        const value = ctx.data[key2];
+      for (const key3 of extraKeys) {
+        const value = ctx.data[key3];
         pairs.push({
-          key: { status: "valid", value: key2 },
+          key: { status: "valid", value: key3 },
           value: catchall._parse(
-            new ParseInputLazyPath(ctx, value, ctx.path, key2)
+            new ParseInputLazyPath(ctx, value, ctx.path, key3)
             //, ctx.child(key), value, getParsedType(value)
           ),
-          alwaysSet: key2 in ctx.data
+          alwaysSet: key3 in ctx.data
         });
       }
     }
@@ -2462,10 +2462,10 @@ var ZodObject = class _ZodObject extends ZodType {
       return Promise.resolve().then(async () => {
         const syncPairs = [];
         for (const pair of pairs) {
-          const key2 = await pair.key;
+          const key3 = await pair.key;
           const value = await pair.value;
           syncPairs.push({
-            key: key2,
+            key: key3,
             value,
             alwaysSet: pair.alwaysSet
           });
@@ -2590,8 +2590,8 @@ var ZodObject = class _ZodObject extends ZodType {
   //   }) as any;
   //   return merged;
   // }
-  setKey(key2, schema) {
-    return this.augment({ [key2]: schema });
+  setKey(key3, schema) {
+    return this.augment({ [key3]: schema });
   }
   // merge<Incoming extends AnyZodObject>(
   //   merging: Incoming
@@ -2622,9 +2622,9 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   pick(mask) {
     const shape = {};
-    for (const key2 of util.objectKeys(mask)) {
-      if (mask[key2] && this.shape[key2]) {
-        shape[key2] = this.shape[key2];
+    for (const key3 of util.objectKeys(mask)) {
+      if (mask[key3] && this.shape[key3]) {
+        shape[key3] = this.shape[key3];
       }
     }
     return new _ZodObject({
@@ -2634,9 +2634,9 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   omit(mask) {
     const shape = {};
-    for (const key2 of util.objectKeys(this.shape)) {
-      if (!mask[key2]) {
-        shape[key2] = this.shape[key2];
+    for (const key3 of util.objectKeys(this.shape)) {
+      if (!mask[key3]) {
+        shape[key3] = this.shape[key3];
       }
     }
     return new _ZodObject({
@@ -2652,12 +2652,12 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   partial(mask) {
     const newShape = {};
-    for (const key2 of util.objectKeys(this.shape)) {
-      const fieldSchema = this.shape[key2];
-      if (mask && !mask[key2]) {
-        newShape[key2] = fieldSchema;
+    for (const key3 of util.objectKeys(this.shape)) {
+      const fieldSchema = this.shape[key3];
+      if (mask && !mask[key3]) {
+        newShape[key3] = fieldSchema;
       } else {
-        newShape[key2] = fieldSchema.optional();
+        newShape[key3] = fieldSchema.optional();
       }
     }
     return new _ZodObject({
@@ -2667,16 +2667,16 @@ var ZodObject = class _ZodObject extends ZodType {
   }
   required(mask) {
     const newShape = {};
-    for (const key2 of util.objectKeys(this.shape)) {
-      if (mask && !mask[key2]) {
-        newShape[key2] = this.shape[key2];
+    for (const key3 of util.objectKeys(this.shape)) {
+      if (mask && !mask[key3]) {
+        newShape[key3] = this.shape[key3];
       } else {
-        const fieldSchema = this.shape[key2];
+        const fieldSchema = this.shape[key3];
         let newField = fieldSchema;
         while (newField instanceof ZodOptional) {
           newField = newField._def.innerType;
         }
-        newShape[key2] = newField;
+        newShape[key3] = newField;
       }
     }
     return new _ZodObject({
@@ -2920,14 +2920,14 @@ function mergeValues(a, b) {
     return { valid: true, data: a };
   } else if (aType === ZodParsedType.object && bType === ZodParsedType.object) {
     const bKeys = util.objectKeys(b);
-    const sharedKeys = util.objectKeys(a).filter((key2) => bKeys.indexOf(key2) !== -1);
+    const sharedKeys = util.objectKeys(a).filter((key3) => bKeys.indexOf(key3) !== -1);
     const newObj = { ...a, ...b };
-    for (const key2 of sharedKeys) {
-      const sharedValue = mergeValues(a[key2], b[key2]);
+    for (const key3 of sharedKeys) {
+      const sharedValue = mergeValues(a[key3], b[key3]);
       if (!sharedValue.valid) {
         return { valid: false };
       }
-      newObj[key2] = sharedValue.data;
+      newObj[key3] = sharedValue.data;
     }
     return { valid: true, data: newObj };
   } else if (aType === ZodParsedType.array && bType === ZodParsedType.array) {
@@ -3091,11 +3091,11 @@ var ZodRecord = class _ZodRecord extends ZodType {
     const pairs = [];
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    for (const key2 in ctx.data) {
+    for (const key3 in ctx.data) {
       pairs.push({
-        key: keyType._parse(new ParseInputLazyPath(ctx, key2, ctx.path, key2)),
-        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key2], ctx.path, key2)),
-        alwaysSet: key2 in ctx.data
+        key: keyType._parse(new ParseInputLazyPath(ctx, key3, ctx.path, key3)),
+        value: valueType._parse(new ParseInputLazyPath(ctx, ctx.data[key3], ctx.path, key3)),
+        alwaysSet: key3 in ctx.data
       });
     }
     if (ctx.common.async) {
@@ -3143,9 +3143,9 @@ var ZodMap = class extends ZodType {
     }
     const keyType = this._def.keyType;
     const valueType = this._def.valueType;
-    const pairs = [...ctx.data.entries()].map(([key2, value], index) => {
+    const pairs = [...ctx.data.entries()].map(([key3, value], index) => {
       return {
-        key: keyType._parse(new ParseInputLazyPath(ctx, key2, ctx.path, [index, "key"])),
+        key: keyType._parse(new ParseInputLazyPath(ctx, key3, ctx.path, [index, "key"])),
         value: valueType._parse(new ParseInputLazyPath(ctx, value, ctx.path, [index, "value"]))
       };
     });
@@ -3153,30 +3153,30 @@ var ZodMap = class extends ZodType {
       const finalMap = /* @__PURE__ */ new Map();
       return Promise.resolve().then(async () => {
         for (const pair of pairs) {
-          const key2 = await pair.key;
+          const key3 = await pair.key;
           const value = await pair.value;
-          if (key2.status === "aborted" || value.status === "aborted") {
+          if (key3.status === "aborted" || value.status === "aborted") {
             return INVALID;
           }
-          if (key2.status === "dirty" || value.status === "dirty") {
+          if (key3.status === "dirty" || value.status === "dirty") {
             status.dirty();
           }
-          finalMap.set(key2.value, value.value);
+          finalMap.set(key3.value, value.value);
         }
         return { status: status.value, value: finalMap };
       });
     } else {
       const finalMap = /* @__PURE__ */ new Map();
       for (const pair of pairs) {
-        const key2 = pair.key;
+        const key3 = pair.key;
         const value = pair.value;
-        if (key2.status === "aborted" || value.status === "aborted") {
+        if (key3.status === "aborted" || value.status === "aborted") {
           return INVALID;
         }
-        if (key2.status === "dirty" || value.status === "dirty") {
+        if (key3.status === "dirty" || value.status === "dirty") {
           status.dirty();
         }
-        finalMap.set(key2.value, value.value);
+        finalMap.set(key3.value, value.value);
       }
       return { status: status.value, value: finalMap };
     }
@@ -3837,7 +3837,7 @@ ZodNaN.create = (params) => {
     ...processCreateParams(params)
   });
 };
-var BRAND = /* @__PURE__ */ Symbol("zod_brand");
+var BRAND = Symbol("zod_brand");
 var ZodBranded = class extends ZodType {
   _parse(input) {
     const { ctx } = this._processInputParams(input);
@@ -4119,7 +4119,7 @@ function verifyToken(token) {
 }
 
 // src/http.ts
-var HANDLED = /* @__PURE__ */ Symbol("handled");
+var HANDLED = Symbol("handled");
 var Router = class {
   routes = [];
   add(method, pattern, handler2, opts = {}) {
@@ -4383,6 +4383,35 @@ CREATE TABLE IF NOT EXISTS cash_counts (
   updated_by INTEGER REFERENCES users(id),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Day-by-day flock records (the farm tabs of the DAILY REPORT workbook). Kept apart from the ledger on purpose:
+-- no money moves here, and re-importing the JOURNALS sheet (which rebuilds farms and batches) leaves these alone.
+-- A flock finds its farm and batch by name and placement date when it is read, so there is no foreign key to them.
+CREATE TABLE IF NOT EXISTS flocks (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE,
+  placement_date TEXT NOT NULL,
+  placed_qty REAL,              -- chicks billed
+  gross_qty REAL NOT NULL,      -- chicks counted, including the hatchery's extra (usually +2%)
+  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','closed')),
+  source TEXT NOT NULL DEFAULT 'app',
+  notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (name, placement_date)
+);
+
+CREATE TABLE IF NOT EXISTS flock_days (
+  flock_id INTEGER NOT NULL REFERENCES flocks(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  mortality REAL NOT NULL DEFAULT 0,
+  sale_qty REAL NOT NULL DEFAULT 0,
+  sale_kg REAL NOT NULL DEFAULT 0,
+  feed_in REAL NOT NULL DEFAULT 0,    -- bags received (negative = returned or moved out)
+  feed_used REAL NOT NULL DEFAULT 0,  -- bags taken
+  avg_weight_g REAL,                  -- weighed sample, when one was taken
+  source TEXT NOT NULL DEFAULT 'app',
+  PRIMARY KEY (flock_id, date)
+);
 `;
 
 // src/db.ts
@@ -4442,11 +4471,11 @@ function initDb() {
   })();
   return ready;
 }
-async function getSetting(key2, fallback = "") {
-  return (await get("SELECT value FROM settings WHERE key = ?", key2))?.value ?? fallback;
+async function getSetting(key3, fallback = "") {
+  return (await get("SELECT value FROM settings WHERE key = ?", key3))?.value ?? fallback;
 }
-async function setSetting(key2, value) {
-  await run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key2, value);
+async function setSetting(key3, value) {
+  await run("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key3, value);
 }
 async function backupLocal(prefix) {
   if (remote) return null;
@@ -4558,9 +4587,9 @@ async function seed() {
     console.log(`[seed] Created user "admin" with password "${config.adminPassword}" \u2014 change it in Settings after first login.`);
   }
 }
-var sysAccountId = async (key2) => {
-  const r = await get("SELECT id FROM accounts WHERE sys_key=?", key2);
-  if (!r) throw new Error(`System account missing: ${key2}`);
+var sysAccountId = async (key3) => {
+  const r = await get("SELECT id FROM accounts WHERE sys_key=?", key3);
+  if (!r) throw new Error(`System account missing: ${key3}`);
   return r.id;
 };
 var feedTypes = async () => {
@@ -5082,9 +5111,9 @@ async function batchAggregates(batchId) {
     a.wipBalance += amount2;
     if (r.category === "cogs") continue;
     a.totalCost += amount2;
-    const key2 = r.category && r.category in a.costs ? r.category : "misc";
-    a.costs[key2].amount += amount2;
-    a.costs[key2].qty += r.q;
+    const key3 = r.category && r.category in a.costs ? r.category : "misc";
+    a.costs[key3].amount += amount2;
+    a.costs[key3].qty += r.q;
   }
   const sales = await all(
     `SELECT e.batch_id,
@@ -5850,11 +5879,11 @@ async function cashbook(date2) {
     const pt = round2(payments.reduce((s, l) => s + l.credit, 0));
     return { ...a, opening: round2(opening), receipts, payments, totalReceipts: rt, totalPayments: pt, closing: round2(opening + rt - pt) };
   }));
-  const count = await get("SELECT denominations,damage,total,note FROM cash_counts WHERE date=?", date2);
+  const count2 = await get("SELECT denominations,damage,total,note FROM cash_counts WHERE date=?", date2);
   return {
     date: date2,
     books,
-    count: count ? { denominations: JSON.parse(count.denominations), damage: count.damage, total: count.total, note: count.note } : null
+    count: count2 ? { denominations: JSON.parse(count2.denominations), damage: count2.damage, total: count2.total, note: count2.note } : null
   };
 }
 async function saveCount(date2, denominations, damage, note2, userId) {
@@ -5958,24 +5987,24 @@ async function importJournal(allRows, tb, opts) {
     prev = d2;
     rows.push({ ...r, date: d2 });
   }
-  const farmNames = /* @__PURE__ */ new Map();
+  const farmNames2 = /* @__PURE__ */ new Map();
   for (const r of rows) {
     const n2 = norm(r.account);
     const cls = tb[n2];
-    if (FARM_RE.test(n2) && !/OWNER|RENT/.test(n2) && (!cls || cls.toUpperCase().includes("ASSET"))) farmNames.set(key(n2), n2);
+    if (FARM_RE.test(n2) && !/OWNER|RENT/.test(n2) && (!cls || cls.toUpperCase().includes("ASSET"))) farmNames2.set(key(n2), n2);
   }
   const parts = (k) => {
     const m = /^(.*?)F?FARM(\d*)$/.exec(k);
     return m ? { base: m[1], num: m[2] === "1" ? "" : m[2] } : null;
   };
-  const farmInfo = [...farmNames.keys()].map((k) => ({ k, ...parts(k) })).filter((f) => f.base !== void 0);
+  const farmInfo = [...farmNames2.keys()].map((k) => ({ k, ...parts(k) })).filter((f) => f.base !== void 0);
   const farmCache = /* @__PURE__ */ new Map();
   const resolveFarmKey = (text) => {
     const k = key(text);
     if (!k) return null;
     if (farmCache.has(k)) return farmCache.get(k);
     let found = null;
-    if (farmNames.has(k)) found = k;
+    if (farmNames2.has(k)) found = k;
     else if (!/OWNER|RENT/.test(k)) {
       const p = parts(k);
       if (p && p.base.length >= 3) {
@@ -6030,7 +6059,7 @@ async function importJournal(allRows, tb, opts) {
     const farmIdFor = async (fk) => {
       let id2 = farmIds.get(fk);
       if (id2) return id2;
-      const display = farmNames.get(fk);
+      const display = farmNames2.get(fk);
       const existing = await get("SELECT id FROM farms WHERE name=?", display);
       id2 = existing ? existing.id : (await run("INSERT INTO farms(name) VALUES(?)", display)).id;
       farmIds.set(fk, id2);
@@ -6480,6 +6509,407 @@ function insightRoutes(r) {
   void run;
 }
 
+// src/importer/daily.ts
+var STALE_DAYS = 7;
+var n0 = (v) => typeof v === "number" && Number.isFinite(v) ? v : 0;
+async function parseDailyWorkbook(buf) {
+  const XLSX = await import("xlsx");
+  let wb;
+  try {
+    wb = XLSX.read(buf, { type: "buffer", cellDates: false, cellFormula: true, cellHTML: false, cellStyles: false });
+  } catch {
+    throw badRequest("Could not read that file. Please upload the .xlsx workbook.");
+  }
+  if (!wb.SheetNames.some((n2) => n2.trim().toUpperCase() === "DAILY REPORT")) throw badRequest(`This workbook has no "DAILY REPORT" sheet. Sheets found: ${wb.SheetNames.slice(0, 8).join(", ")}`);
+  const flocks = [];
+  const skipped = [];
+  for (const sheetName of wb.SheetNames) {
+    if (/^(DAILY )?REPORT$/i.test(sheetName.trim())) continue;
+    const ws = wb.Sheets[sheetName];
+    const cell = (col, row) => ws[`${col}${row}`];
+    const val = (col, row) => cell(col, row)?.v;
+    let header = 0;
+    for (let r = 1; r <= 10 && !header; r++) if (String(val("B", r) ?? "").trim().toUpperCase() === "DATE") header = r;
+    if (!header) {
+      skipped.push(`${sheetName}: no day-by-day table`);
+      continue;
+    }
+    const grossQty = n0(val("F", header - 1));
+    if (grossQty <= 0) {
+      skipped.push(`${sheetName}: no placement quantity`);
+      continue;
+    }
+    const billed = n0(val("D", header - 1));
+    const days = [];
+    let placementDate = null;
+    for (let r = header + 1; ; r++) {
+      const date2 = toIso(val("B", r));
+      if (!date2) break;
+      placementDate ??= date2;
+      const weighed = cell("Q", r);
+      const d2 = {
+        date: date2,
+        mortality: n0(val("D", r)),
+        sale_qty: n0(val("F", r)),
+        sale_kg: n0(val("H", r)),
+        feed_in: n0(val("I", r)),
+        feed_used: n0(val("J", r)),
+        avg_weight_g: !weighed?.f && n0(weighed?.v) > 0 ? n0(weighed?.v) : null
+        // on some tabs this column is a formula, not a weighing
+      };
+      if (d2.mortality || d2.sale_qty || d2.sale_kg || d2.feed_in || d2.feed_used || d2.avg_weight_g) days.push(d2);
+    }
+    if (!placementDate) {
+      skipped.push(`${sheetName}: no dates`);
+      continue;
+    }
+    const hidden = !!wb.Workbook?.Sheets?.find((s) => s.name === sheetName)?.Hidden;
+    flocks.push({ name: sheetName.trim().toUpperCase().replace(/\s+/g, " "), hidden, placementDate, placedQty: billed > 0 ? billed : grossQty, grossQty, days });
+  }
+  if (!flocks.length) throw badRequest("No farm tabs with a day-by-day table were found in this workbook.");
+  return { flocks, skipped };
+}
+function initialStatus(f, asOf, now) {
+  if (f.hidden) return "closed";
+  const last = f.days.reduce((m, d2) => d2.date <= now && d2.date > m ? d2.date : m, f.placementDate);
+  return asOf && daysBetween(last, asOf) > STALE_DAYS ? "closed" : "running";
+}
+async function importDailyWorkbook(buf) {
+  const { flocks, skipped } = await parseDailyWorkbook(buf);
+  const now = today();
+  const asOf = flocks.filter((f) => !f.hidden).flatMap((f) => f.days).reduce((m, d2) => d2.date <= now && (!m || d2.date > m) ? d2.date : m, null);
+  const backup = await backupLocal("before-daily-import");
+  let created = 0, updated = 0, dayCount = 0;
+  await tx(async () => {
+    for (const f of flocks) {
+      const existing = await get("SELECT id FROM flocks WHERE name=? AND placement_date=?", f.name, f.placementDate);
+      let id2;
+      if (existing) {
+        id2 = existing.id;
+        updated++;
+        await run("UPDATE flocks SET placed_qty=?, gross_qty=? WHERE id=?", f.placedQty, f.grossQty, id2);
+        await run(`DELETE FROM flock_days WHERE flock_id=? AND source='excel'`, id2);
+      } else {
+        id2 = (await run(`INSERT INTO flocks(name,placement_date,placed_qty,gross_qty,status,source) VALUES(?,?,?,?,?,'excel')`, f.name, f.placementDate, f.placedQty, f.grossQty, initialStatus(f, asOf, now))).id;
+        created++;
+      }
+      for (let i = 0; i < f.days.length; i += 40) {
+        const chunk = f.days.slice(i, i + 40);
+        await run(
+          `INSERT OR REPLACE INTO flock_days(flock_id,date,mortality,sale_qty,sale_kg,feed_in,feed_used,avg_weight_g,source) VALUES ${chunk.map(() => `(?,?,?,?,?,?,?,?,'excel')`).join(",")}`,
+          ...chunk.flatMap((d2) => [id2, d2.date, d2.mortality, d2.sale_qty, d2.sale_kg, d2.feed_in, d2.feed_used, d2.avg_weight_g])
+        );
+      }
+      dayCount += f.days.length;
+    }
+  });
+  const counts = await all("SELECT status, COUNT(*) n FROM flocks GROUP BY status");
+  return {
+    flocks: flocks.length,
+    created,
+    updated,
+    days: dayCount,
+    asOf,
+    skipped,
+    backup,
+    running: counts.find((c) => c.status === "running")?.n ?? 0,
+    closed: counts.find((c) => c.status === "closed")?.n ?? 0
+  };
+}
+
+// src/services/flockMetrics.ts
+var STANDARD = [
+  [14, 57, 0.25],
+  [17, 74, 0.42],
+  [21, 94, 0.55],
+  [25, 118, 0.65],
+  [29, 143, 0.74],
+  [34, 175, 0.8],
+  [40, 205, 0.88],
+  [45, 237, 0.95],
+  [49, 274, 1],
+  [53, 319, 1.03],
+  [58, 363, 1.06],
+  [63, 418, 1.07],
+  [68, 463, 1.11],
+  [74, 520, 1.13],
+  [81, 585, 1.15],
+  [86, 640, 1.18],
+  [92, 710, 1.2],
+  [97, 782, 1.21],
+  [102, 857, 1.22],
+  [108, 932, 1.24],
+  [114, 1010, 1.26],
+  [117, 1082, 1.28],
+  [121, 1148, 1.31],
+  [124, 1221, 1.34],
+  [127, 1297, 1.36],
+  [130, 1376, 1.37],
+  [133, 1456, 1.39],
+  [136, 1540, 1.4],
+  [141, 1615, 1.42],
+  [144, 1698, 1.44],
+  [149, 1782, 1.45],
+  [153, 1867, 1.47],
+  [157, 1950, 1.49],
+  [161, 2035, 1.51],
+  [165, 2120, 1.52],
+  [168, 2194, 1.55],
+  [171, 2276, 1.57],
+  [174, 2359, 1.59],
+  [179, 2440, 1.61],
+  [183, 2520, 1.63],
+  [187, 2600, 1.65],
+  [188, 2680, 1.67]
+];
+var LAST_DAY = STANDARD.length - 1;
+var BROAST_DAY = 27;
+var FULL_SIZE_DAY = 35;
+var ORDER_AHEAD_DAYS = 5;
+var SOLD_OUT_SHARE = 0.07;
+function feedChart(placement, gross, days, bagKg) {
+  const points = [];
+  let cum = 0;
+  STANDARD.forEach(([feed, weight, fcr], day) => {
+    const date2 = addDays(placement, day);
+    let gone = 0;
+    for (const d2 of days) if (d2.date <= date2) gone += d2.mortality + d2.sale_qty;
+    const live = gross - gone;
+    const stdBags = feed * live / 1e3 / bagKg;
+    cum += stdBags;
+    points.push({ day, date: date2, live, stdFeedG: feed, stdWeightG: weight, stdFcr: fcr, stdBags, cumStdBags: cum });
+  });
+  return points;
+}
+function flockMetrics(flock, days, asOf, bagKg) {
+  const chart = feedChart(flock.placement_date, flock.gross_qty, days, bagKg);
+  const sum = (k) => days.reduce((s, d2) => s + d2[k], 0);
+  const age = Math.max(0, daysBetween(flock.placement_date, asOf));
+  const totalMortality = sum("mortality"), sold = sum("sale_qty"), soldKg = sum("sale_kg"), feedIn = sum("feed_in"), feedUsed = sum("feed_used");
+  const balanceQty = flock.gross_qty - totalMortality - sold;
+  let feedAge = null;
+  for (const p of chart) if (p.cumStdBags <= feedUsed) feedAge = p.day;
+  const cumAt = (day) => chart[Math.min(day, LAST_DAY)].cumStdBags;
+  const chartFeed = cumAt(age);
+  const feedForBroast = cumAt(BROAST_DAY);
+  const feedForFull = cumAt(FULL_SIZE_DAY);
+  const soldOut = sold > 0 && balanceQty < flock.gross_qty * SOLD_OUT_SHARE;
+  const last = days.reduce((m, d2) => d2.date <= asOf && (!m || d2.date > m) ? d2.date : m, null);
+  const weighed = [...days].filter((d2) => d2.avg_weight_g && d2.date <= asOf).sort((a, b) => a.date < b.date ? 1 : -1)[0];
+  return {
+    age,
+    mortalityOnDay: days.find((d2) => d2.date === asOf)?.mortality ?? 0,
+    totalMortality,
+    mortalityPct: flock.gross_qty > 0 ? totalMortality * 100 / flock.gross_qty : 0,
+    sold,
+    soldKg,
+    avgSoldKg: sold > 0 && soldKg > 0 ? soldKg / sold : null,
+    balanceQty,
+    soldOut,
+    feedIn,
+    feedUsed,
+    feedStock: feedIn - feedUsed,
+    chartFeed,
+    chartDiff: chartFeed - feedUsed,
+    feedForBroast,
+    feedForFull,
+    balanceForBroast: feedForBroast - feedUsed,
+    feedAge,
+    expectedWeightG: feedAge === null ? null : STANDARD[feedAge][1],
+    ageWeightG: age <= LAST_DAY ? STANDARD[age][1] : null,
+    ageDiff: feedAge === null ? null : feedAge - age,
+    // Bags to order: what the flock needs up to five days past where its feed intake has reached, less all it has received.
+    feedNeed: cumAt((feedAge ?? age) + ORDER_AHEAD_DAYS) - feedIn,
+    lastEntry: last,
+    lastWeighedG: weighed?.avg_weight_g ?? null
+  };
+}
+function flockIssues(flock, days, today2) {
+  const out = [];
+  const future = days.filter((d2) => d2.date > today2);
+  if (future.length) out.push(`${future.length} ${future.length === 1 ? "entry is" : "entries are"} dated after today (${future[0].date}${future.length > 1 ? ` to ${future[future.length - 1].date}` : ""})`);
+  const noKg = days.filter((d2) => d2.sale_qty > 0 && !d2.sale_kg);
+  if (noKg.length) out.push(`${noKg.reduce((s, d2) => s + d2.sale_qty, 0)} birds sold with no weight (${noKg.map((d2) => d2.date).join(", ")})`);
+  const noQty = days.filter((d2) => d2.sale_kg > 0 && !d2.sale_qty);
+  if (noQty.length) out.push(`Sale weight with no bird count (${noQty.map((d2) => d2.date).join(", ")})`);
+  const gone = days.reduce((s, d2) => s + d2.mortality + d2.sale_qty, 0);
+  if (gone > flock.gross_qty) out.push(`Deaths and sales (${gone}) are more than the birds placed (${flock.gross_qty})`);
+  const stock = days.reduce((s, d2) => s + d2.feed_in - d2.feed_used, 0);
+  if (stock < -0.01) out.push(`More feed used than received (${Math.abs(stock)} bags short)`);
+  return out;
+}
+
+// src/services/daily.ts
+var key2 = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+var FARM_ALIASES = {
+  ANANDFARM: "ANANAD FARM",
+  JITHUKOTTAMALA: "JITHU KOTAMALA FARM",
+  LALUKOTTMALA2: "LALU KOTTAMALA FARM 2",
+  LALUKOTTAMALA2: "LALU KOTTAMALA FARM 2",
+  LALUKOTTAMALA3: "LALU KOTTAMALA FARM 3",
+  MATHAIKAIPPINI: "MATHAI FARM",
+  MADHUCHUNGATHARA: "MADHU FARM",
+  USMANCHUNGATHARA: "USMAN FARM",
+  RAFEEKPALEMAD: "RAFEEK FARM",
+  NAVAJITH: "NAVJITH FARM"
+};
+function farmNameFor(flockName, farms) {
+  const k = key2(flockName);
+  const byKey = (x) => farms.find((f) => key2(f) === x) ?? null;
+  return byKey(k) ?? byKey(`${k}FARM`) ?? (FARM_ALIASES[k] ? byKey(key2(FARM_ALIASES[k])) : null);
+}
+function ledgerBatch(f, batches, farms) {
+  const farm = farmNameFor(f.name, farms);
+  if (!farm) return { farm: null, batch: null };
+  const t = Date.parse(f.placement_date);
+  let best = null, gap = 11;
+  for (const b of batches) {
+    if (b.farm_name !== farm || !b.placement_date) continue;
+    const d2 = Math.abs(Date.parse(b.placement_date) - t) / 864e5;
+    if (d2 < gap) {
+      gap = d2;
+      best = b;
+    }
+  }
+  return { farm, batch: best };
+}
+function ledgerCheck(f, days, batches, farms, through) {
+  const { farm, batch } = ledgerBatch(f, batches, farms);
+  const upTo = days.filter((d2) => !through || d2.date <= through);
+  const daily = { birds: upTo.reduce((s, d2) => s + d2.sale_qty, 0), kg: upTo.reduce((s, d2) => s + d2.sale_kg, 0), bags: upTo.reduce((s, d2) => s + d2.feed_in, 0) };
+  if (!batch) return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: [farm ? "No batch in the accounts for this placement" : "No farm in the accounts with this name"] };
+  const ledger2 = { birds: batch.soldBirds, kg: batch.soldKg, bags: batch.feedBags };
+  const differs = [];
+  if (f.placed_qty !== null && batch.placed_qty !== null && Math.abs(f.placed_qty - batch.placed_qty) >= 1) differs.push("placed");
+  if (batch.placed_qty === null) differs.push("placed");
+  if (Math.abs(daily.birds - ledger2.birds) >= 1) differs.push("birds sold");
+  if (Math.abs(daily.kg - ledger2.kg) >= 1) differs.push("kg sold");
+  if (Math.abs(daily.bags - ledger2.bags) >= 0.5) differs.push("feed bags");
+  return { farm, batchId: batch.id, batchNo: batch.batch_no, batchStatus: batch.status, placed: batch.placed_qty, daily, ledger: ledger2, differs };
+}
+var bagSize = async () => Number(await getSetting("feed_bag_kg", "50")) || 50;
+var ledgerThrough = async () => (await get(`SELECT MAX(date) d FROM vouchers WHERE source='import'`))?.d ?? null;
+var farmNames = async () => (await all("SELECT name FROM farms")).map((f) => f.name);
+var flockDays = (id2) => all("SELECT * FROM flock_days WHERE flock_id=? ORDER BY date", id2);
+async function dailyReport(requestedDate) {
+  const now = today();
+  const flocks = await all("SELECT * FROM flocks ORDER BY placement_date, name");
+  const rows = await all("SELECT * FROM flock_days ORDER BY date");
+  const byFlock = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const l = byFlock.get(r.flock_id);
+    if (l) l.push(r);
+    else byFlock.set(r.flock_id, [r]);
+  }
+  const running = new Set(flocks.filter((f) => f.status === "running").map((f) => f.id));
+  const latest = rows.reduce((m, r) => running.has(r.flock_id) && r.date <= now && (!m || r.date > m) ? r.date : m, null);
+  const asOf = requestedDate ?? latest ?? now;
+  const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
+  return {
+    asOf,
+    today: now,
+    ledgerThrough: through,
+    bagKg,
+    flocks: flocks.map((f) => {
+      const days = byFlock.get(f.id) ?? [];
+      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d2) => d2.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through) };
+    })
+  };
+}
+async function flockDetail(id2) {
+  const f = await get("SELECT * FROM flocks WHERE id=?", id2);
+  if (!f) throw notFound("Flock not found");
+  const now = today();
+  const days = await flockDays(id2);
+  const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
+  const chart = feedChart(f.placement_date, f.gross_qty, days, bagKg);
+  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, farms, through), days, chart };
+}
+async function createFlock(d2) {
+  if (await get("SELECT 1 FROM flocks WHERE name=? AND placement_date=?", d2.name, d2.placementDate)) throw badRequest(`${d2.name} already has a flock placed on that date`);
+  return { id: (await run(`INSERT INTO flocks(name,placement_date,placed_qty,gross_qty,source,notes) VALUES(?,?,?,?,'app',?)`, d2.name, d2.placementDate, d2.placedQty, d2.grossQty, d2.notes ?? null)).id };
+}
+async function updateFlock(id2, d2) {
+  if (!await get("SELECT 1 FROM flocks WHERE id=?", id2)) throw notFound("Flock not found");
+  await run(
+    "UPDATE flocks SET status=COALESCE(?,status), placement_date=COALESCE(?,placement_date), placed_qty=COALESCE(?,placed_qty), gross_qty=COALESCE(?,gross_qty), notes=COALESCE(?,notes) WHERE id=?",
+    d2.status,
+    d2.placementDate,
+    d2.placedQty,
+    d2.grossQty,
+    d2.notes,
+    id2
+  );
+}
+async function saveDay(id2, date2, d2) {
+  const f = await get("SELECT * FROM flocks WHERE id=?", id2);
+  if (!f) throw notFound("Flock not found");
+  const empty = !d2.mortality && !d2.saleQty && !d2.saleKg && !d2.feedIn && !d2.feedUsed && !d2.avgWeightG;
+  if (empty) {
+    await run("DELETE FROM flock_days WHERE flock_id=? AND date=?", id2, date2);
+    return;
+  }
+  if (date2 < f.placement_date) throw badRequest("That date is before this flock was placed");
+  if (date2 > today()) throw badRequest("That date is in the future");
+  await run(
+    `INSERT INTO flock_days(flock_id,date,mortality,sale_qty,sale_kg,feed_in,feed_used,avg_weight_g,source) VALUES(?,?,?,?,?,?,?,?,'app')
+             ON CONFLICT(flock_id,date) DO UPDATE SET mortality=excluded.mortality, sale_qty=excluded.sale_qty, sale_kg=excluded.sale_kg, feed_in=excluded.feed_in, feed_used=excluded.feed_used, avg_weight_g=excluded.avg_weight_g, source='app'`,
+    id2,
+    date2,
+    d2.mortality,
+    d2.saleQty,
+    d2.saleKg,
+    d2.feedIn,
+    d2.feedUsed,
+    d2.avgWeightG
+  );
+}
+
+// src/routes/daily.ts
+var isoDate2 = external_exports.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a date");
+var count = external_exports.coerce.number().min(0);
+function dailyRoutes(r) {
+  r.get("/api/daily", async ({ query }) => await dailyReport(query.get("date") ? isoDate2.parse(query.get("date")) : void 0));
+  r.get("/api/daily/flocks/:id", async ({ params }) => await flockDetail(Number(params.id)));
+  r.post("/api/daily/flocks", async ({ body }) => {
+    const d2 = external_exports.object({
+      name: external_exports.string().trim().min(2, "Choose the farm").max(80),
+      placementDate: isoDate2,
+      placedQty: external_exports.coerce.number().positive("Enter the chicks billed"),
+      grossQty: external_exports.coerce.number().positive("Enter the chicks counted"),
+      notes: external_exports.string().trim().max(300).nullable().optional()
+    }).parse(body);
+    return await createFlock({ ...d2, name: d2.name.toUpperCase() });
+  });
+  r.patch("/api/daily/flocks/:id", async ({ params, body }) => {
+    const d2 = external_exports.object({
+      status: external_exports.enum(["running", "closed"]).optional(),
+      placementDate: isoDate2.optional(),
+      placedQty: external_exports.coerce.number().positive().optional(),
+      grossQty: external_exports.coerce.number().positive().optional(),
+      notes: external_exports.string().trim().max(300).nullable().optional()
+    }).parse(body);
+    await updateFlock(Number(params.id), d2);
+  });
+  r.put("/api/daily/flocks/:id/days/:date", async ({ params, body }) => {
+    const d2 = external_exports.object({
+      mortality: count.default(0),
+      saleQty: count.default(0),
+      saleKg: count.default(0),
+      feedIn: external_exports.coerce.number().default(0),
+      // negative when bags go back or move to another farm
+      feedUsed: count.default(0),
+      avgWeightG: count.nullable().default(null)
+    }).parse(body);
+    await saveDay(Number(params.id), isoDate2.parse(params.date), d2);
+  });
+  r.post("/api/import/daily-report", async ({ readRaw }) => {
+    const buf = await readRaw();
+    if (buf.length < 1e3) throw badRequest("That file looks empty. Choose the daily report workbook (.xlsx).");
+    return await importDailyWorkbook(buf);
+  }, { admin: true, raw: true });
+}
+
 // src/app.ts
 var router = new Router();
 router.get("/api/health", () => ({ ok: true, time: (/* @__PURE__ */ new Date()).toISOString() }), { auth: false });
@@ -6487,6 +6917,7 @@ authRoutes(router);
 masterRoutes(router);
 transactionRoutes(router);
 insightRoutes(router);
+dailyRoutes(router);
 var booted = null;
 var bootstrap = () => booted ??= seed().catch((e) => {
   booted = null;

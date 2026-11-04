@@ -8,6 +8,7 @@ import type { IconName } from './ui';
 
 const NAV: Array<{ label?: string; to: string; icon: IconName; text: string; admin?: boolean }> = [
   { label: 'Overview', to: '/', icon: 'home', text: 'Dashboard' },
+  { to: '/daily', icon: 'calendar', text: 'Daily report' },
   { to: '/batches', icon: 'egg', text: 'Batches' },
   { to: '/farms', icon: 'barn', text: 'Farms' },
   { label: 'Business', to: '/sales', icon: 'receipt', text: 'Sales bills' },

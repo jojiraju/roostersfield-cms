@@ -4,6 +4,7 @@ import { authRoutes } from './routes/auth.ts';
 import { masterRoutes } from './routes/masters.ts';
 import { transactionRoutes } from './routes/transactions.ts';
 import { insightRoutes } from './routes/insights.ts';
+import { dailyRoutes } from './routes/daily.ts';
 
 export const router = new Router();
 router.get('/api/health', () => ({ ok: true, time: new Date().toISOString() }), { auth: false });
@@ -11,6 +12,7 @@ authRoutes(router);
 masterRoutes(router);
 transactionRoutes(router);
 insightRoutes(router);
+dailyRoutes(router);
 
 let booted: Promise<void> | null = null;
 /** Creates tables and starter data once per process (cheap no-op afterwards). */

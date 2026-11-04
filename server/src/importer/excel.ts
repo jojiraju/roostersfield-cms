@@ -5,7 +5,7 @@ import { num } from '../util.ts';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-function toIso(v: unknown): string | null {
+export function toIso(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
   if (typeof v === 'number') {
     if (v < 20000 || v > 80000) return null;
