@@ -219,6 +219,13 @@ export default function DailyReport() {
   );
 }
 
+/** Colour for an issue message: red = numbers that cannot be right, amber = missing data, blue = date problems. */
+function issueTone(msg: string): 'red' | 'amber' | 'blue' {
+  if (/more than the birds placed/i.test(msg)) return 'red';
+  if (/no weight/i.test(msg)) return 'amber';
+  return 'blue';
+}
+
 function CheckTab({ flocks, through, open }: { flocks: Flock[]; through: string | null; open: (f: Flock) => void }) {
   const issues = flocks.filter((f) => f.issues.length);
   const diffs = flocks.filter((f) => f.check.differs.length).sort((a, b) => (a.placement_date < b.placement_date ? 1 : -1));
@@ -229,10 +236,26 @@ function CheckTab({ flocks, through, open }: { flocks: Flock[]; through: string 
   return (
     <div className="col gap-16">
       <Card pad={false}>
-        <CardHead title="Entries to correct" icon="alert" />
+        <CardHead title="Entries to correct" icon="alert" right={issues.length > 0 ? <Badge tone="red">{issues.length} flock{issues.length === 1 ? '' : 's'}</Badge> : undefined} />
         {issues.length === 0 ? <Empty title="No problems found" icon="check" /> : (
-          <div className="card-body col gap-8">
-            {issues.map((f) => <div key={f.id}><Link to={`/daily/${f.id}`}><b>{f.name}</b></Link><div className="small muted">{f.issues.join(' · ')}</div></div>)}
+          <div className="card-body issue-list">
+            {issues.map((f) => {
+              const parts = f.issues.flatMap((s) => s.split(' · '));
+              const tones = parts.map(issueTone);
+              const worst = tones.includes('red') ? 'red' : tones.includes('amber') ? 'amber' : 'blue';
+              return (
+                <Link key={f.id} to={`/daily/${f.id}`} className="issue-row">
+                  <span className={`issue-ico ${worst}`}><Icon name={worst === 'blue' ? 'calendar' : worst === 'amber' ? 'scale' : 'alert'} size={18} /></span>
+                  <span className="issue-main">
+                    <b>{f.name}</b>
+                    <span className="issue-tags">
+                      {parts.map((p, i) => <span key={i} className={`issue-tag ${tones[i]}`}>{p}</span>)}
+                    </span>
+                  </span>
+                  <span className="issue-go"><Icon name="chevR" size={18} /></span>
+                </Link>
+              );
+            })}
           </div>
         )}
       </Card>
