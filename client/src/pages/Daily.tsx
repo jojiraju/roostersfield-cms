@@ -21,8 +21,9 @@ const numOrNull = (v: string) => (v.trim() === '' ? null : toNum(v));
 export default function Daily() {
   useTitle('Daily reports');
   const toast = useToast();
-  const [date, setDate] = useState(todayISO());
-  const q = useQuery<{ date: string; rows: DailyRow[] }>(['daily', date], () => api(`/daily${qs({ date })}`));
+  const [picked, setDate] = useState('');
+  const q = useQuery<{ date: string; rows: DailyRow[] }>(['daily', picked], () => api(`/daily${qs({ date: picked || undefined })}`));
+  const date = picked || q.data?.date || todayISO();
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [dirty, setDirty] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);

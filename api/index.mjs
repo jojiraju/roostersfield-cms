@@ -6960,6 +6960,7 @@ async function importDailySheets(sheets, opts) {
       const b = cands[0].b;
       let days = 0;
       for (const r of sh.rows) {
+        for (const k of ["mortality", "saleQty", "saleWeight", "feedIn", "feedUsed"]) if (r[k] !== null && r[k] < 0) r[k] = null;
         if (r.mortality === null && r.saleQty === null && r.saleWeight === null && r.feedIn === null && r.feedUsed === null) continue;
         if (r.date > now) {
           rep.daysSkippedFuture++;
@@ -7003,7 +7004,14 @@ var iso = external_exports.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date lik
 var num2 = external_exports.number().finite().nonnegative().nullable().optional();
 var entry = external_exports.object({ mortality: num2, saleQty: num2, saleWeight: num2, feedIn: num2, feedUsed: num2, note: external_exports.string().max(300).nullable().optional() });
 function dailyRoutes(r) {
-  r.get("/api/daily", async ({ query }) => dailyOverview(iso.parse(query.get("date") || today())));
+  r.get("/api/daily", async ({ query }) => {
+    let d2 = query.get("date");
+    if (!d2) {
+      const last = (await all(`SELECT MAX(date) d FROM (SELECT date FROM daily_logs WHERE date<=? GROUP BY date HAVING COUNT(*)>=5)`, today()))[0]?.d;
+      d2 = last || today();
+    }
+    return dailyOverview(iso.parse(d2));
+  });
   r.get("/api/daily/batch/:id", async ({ params }) => batchDaily(Number(params.id)));
   r.get("/api/std-chart", async () => stdChart());
   r.get("/api/daily/batches", async () => all(`SELECT b.id, f.name farm, b.batch_no, b.status, b.placement_date FROM batches b JOIN farms f ON f.id=b.farm_id WHERE b.placement_date IS NOT NULL AND COALESCE(b.partial,0)=0 ORDER BY b.placement_date DESC LIMIT 200`));

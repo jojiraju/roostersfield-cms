@@ -42,12 +42,16 @@ export async function parseDailyWorkbook(buf: Buffer): Promise<DailySheet[]> {
   const out: DailySheet[] = [];
   for (const name of wb.SheetNames) {
     const data = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: true, defval: null });
-    let h = -1;
-    for (let i = 0; i < Math.min(12, data.length); i++) if (text(data[i]?.[1]) === 'DATE' && text(data[i]?.[3]).startsWith('MORTALITY')) { h = i; break; }
+    let h = -1, off = 0; // off = how far the sheet's columns are shifted from the usual layout (Date in column B)
+    for (let i = 0; i < Math.min(12, data.length); i++) {
+      const cells = ((data[i] as unknown[]) ?? []).map(text);
+      const di = cells.indexOf('DATE'), mi = cells.findIndex((x) => x.startsWith('MORTALITY'));
+      if (di >= 0 && mi > di) { h = i; off = di - 1; break; }
+    }
     if (h < 0) continue; // DAILY REPORT / REPORT summary sheets
     const head = (data[h] as unknown[]).map(text);
     const col = (re: RegExp, fb: number) => { const i = head.findIndex((x) => re.test(x)); return i >= 0 ? i : fb; };
-    const c = { date: 1, mort: col(/^MORTALITY/, 3), saleQty: col(/^SALE QTY/, 5), saleWt: col(/^SALE W/, 7), purchase: col(/^PURCHASE/, 8), taken: col(/^TAIKEN|^TAKEN|^USED/, 9), stdFeed: col(/^STD G/, 12), stdWt: col(/^STD W/, 17), stdFcr: col(/^STD FCR/, 18) };
+    const c = { date: 1 + off, mort: col(/^MORTALITY/, 3 + off), saleQty: col(/^SALE QTY/, 5 + off), saleWt: col(/^SALE W/, 7 + off), purchase: col(/^PURCHASE/, 8 + off), taken: col(/^TAIKEN|^TAKEN|^USED/, 9 + off), stdFeed: col(/^STD G/, 12 + off), stdWt: col(/^STD W/, 17 + off), stdFcr: col(/^STD FCR/, 18 + off) };
     const rows: DailySheet['rows'] = []; const std: DailySheet['std'] = [];
     let day = 0;
     for (let i = h + 1; i < data.length; i++) {
@@ -97,6 +101,8 @@ export async function importDailySheets(sheets: DailySheet[], opts: { userId: nu
       const b = cands[0].b;
       let days = 0;
       for (const r of sh.rows) {
+        // the sheets carry formula leftovers (negative stock figures) on empty future days — not real reports
+        for (const k of ['mortality', 'saleQty', 'saleWeight', 'feedIn', 'feedUsed'] as const) if (r[k] !== null && r[k]! < 0) r[k] = null;
         if (r.mortality === null && r.saleQty === null && r.saleWeight === null && r.feedIn === null && r.feedUsed === null) continue;
         if (r.date > now) { rep.daysSkippedFuture++; continue; }
         const res = await run(

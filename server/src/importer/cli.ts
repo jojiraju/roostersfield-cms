@@ -1,6 +1,9 @@
 // Usage:  npm run import -- "C:\path\ROOSTERS_FIELD.xlsx" --replace   (first load: wipes and rebuilds)
 //         npm run import -- "C:\path\ROOSTERS_FIELD.xlsx" --sync      (later updates: adds new entries, keeps everything else)
 import fs from 'node:fs';
+import path from 'node:path';
+import { dumpAll, isRemote } from '../db.ts';
+import { config } from '../config.ts';
 import { seed } from '../seed.ts';
 import { importJournal } from './core.ts';
 import { importWorkbook, syncWorkbook } from './excel.ts';
@@ -14,6 +17,11 @@ const sync = args.includes('--sync');
 const daily = args.includes('--daily');
 if (!file) { console.error('Usage: npm run import -- <workbook.xlsx> [--replace | --sync | --daily]'); process.exit(1); }
 await seed();
+if (isRemote && !args.includes('--no-backup')) { // hosted database: save a JSON copy of everything first
+  const dir = path.join(path.dirname(config.dbFile), 'backups'); fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `before-import-hosted-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  fs.writeFileSync(out, JSON.stringify(await dumpAll())); console.log('Backup of the hosted database saved to', out);
+}
 const started = Date.now();
 let report;
 if (daily) {
