@@ -32,13 +32,15 @@ vouchers, detects farms and batches, and checks the result against the workbook 
 Anything it can't classify goes to a *Suspense* account (shown on the dashboard) rather than being dropped.
 Replacing existing data takes a backup first.
 
-The farm-by-farm **daily report** workbook is a separate import: *Settings → Your data → Import daily report*
-(or `npm run import -- path/to/file.xlsx --daily`). It reads each farm tab's day-by-day table (deaths, feed, sales) and
-recalculates the rest. It never changes the accounts and is safe to repeat: for a date in both, the workbook wins, and
-other days entered in the app stay. On Vercel, run the same import against Turso or upload through Settings.
+### Adding newer Excel data later (keeps everything already there)
+*Settings → Your data → Update from Excel → "Add new entries"* and choose the newer workbook.
+Only new entries are added, corrected amounts are applied (a backup is taken first), and entries that
+are no longer in the workbook are kept, not deleted.
+Then use *Import farm daily reports* with the `…DAILY_REPORT….xlsx` workbook (one sheet per farm) to fill the
+**Daily reports** page. Sheets are matched to batches by farm name and placement date; days you edited in the app are kept.
+Command line: `npm run import -- --sync file.xlsx` and `npm run import -- --daily file.xlsx` (inside `server/`).
 
 ## Daily use
-- **Daily report**: mortality, feed against the standard chart, weight by feed and by age, and the feed order list for every flock. *Check* lists entries to correct and differences from the accounts.
 - **New entry** (orange button): feed, chicks/new batch, medicine, feed return/transfer, integration, farm expense, receipt, payment, expense, cash⇄bank, journal.
 - **New bill**: box-by-box weighing → live bill total → printable bill with the trader's running balance.
 - **Close batch** moves the batch cost into cost-of-goods-sold so profit appears in reports; re-open is admin-only.

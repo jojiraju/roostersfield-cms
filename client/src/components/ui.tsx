@@ -1,5 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 /* ───────────── Icons (Lucide-style, inline) ───────────── */
 const P: Record<string, string> = {
@@ -165,20 +164,17 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 const iso = (y: number, m: number, d: number) => `${y}-${pad2(m + 1)}-${pad2(d)}`;
 const todayIso = () => { const t = new Date(); return iso(t.getFullYear(), t.getMonth(), t.getDate()); };
 const parseIso = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? { y: +v.slice(0, 4), m: +v.slice(5, 7) - 1, d: +v.slice(8, 10) } : null);
-const CAL_SIZE = { width: 300, height: 375 }; // the calendar always shows six weeks, so its size doesn't change
 
 export function DateInput({ value, onChange, sm, style, placeholder = 'Select date', 'aria-label': ariaLabel }: { value: string; onChange: (v: string) => void; sm?: boolean; style?: React.CSSProperties; placeholder?: string; 'aria-label'?: string }) {
   const [open, setOpen] = useState(false);
   const cur = parseIso(value);
   const [view, setView] = useState(() => { const b = cur ?? parseIso(todayIso())!; return { y: b.y, m: b.m }; });
   const ref = useRef<HTMLDivElement>(null);
-  const cal = useRef<HTMLDivElement>(null);
-  const calStyle = useFloatingPosition(ref, open, CAL_SIZE);
   useEffect(() => {
     if (!open) return;
     const c = parseIso(value) ?? parseIso(todayIso())!;
     setView({ y: c.y, m: c.m });
-    const h = (e: MouseEvent) => { const t = e.target as Node; if (ref.current && !ref.current.contains(t) && !cal.current?.contains(t)) setOpen(false); };
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
     document.addEventListener('mousedown', h);
     document.addEventListener('keydown', k, true);
@@ -206,8 +202,8 @@ export function DateInput({ value, onChange, sm, style, placeholder = 'Select da
         <span className={label ? '' : 'muted'}>{label || placeholder}</span>
         <Icon name="calendar" size={sm ? 16 : 18} />
       </button>
-      {open && createPortal(
-        <div className="cal" ref={cal} style={calStyle} role="dialog" aria-label="Choose date">
+      {open && (
+        <div className="cal" role="dialog" aria-label="Choose date">
           <div className="cal-head">
             <button type="button" className="icon-btn" onClick={() => shift(-1)} aria-label="Previous month"><Icon name="chevL" size={18} /></button>
             <div className="row" style={{ gap: 6 }}>
@@ -227,8 +223,7 @@ export function DateInput({ value, onChange, sm, style, placeholder = 'Select da
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}>Clear</button>
             <button type="button" onClick={() => { onChange(t); setOpen(false); }}>Today</button>
           </div>
-        </div>,
-        document.body,
+        </div>
       )}
     </div>
   );
@@ -402,48 +397,6 @@ export function Confirm({ title, message, confirmLabel = 'Confirm', danger, onCo
 }
 
 /* ───────────── Combo (searchable select) ───────────── */
-const MENU_GAP = 6, MENU_EDGE = 12, MENU_MAX = 280, MENU_MIN = 160;
-/**
- * Places a floating panel against its input, in screen coordinates, opening upward when there is more room above.
- * Panels are rendered on <body> so a scrolling popup can't clip them, which means they have to follow the input themselves.
- * Without `fixed` the panel matches the input's width and shrinks to fit; with it the panel keeps that size and is kept on screen.
- */
-function useFloatingPosition(anchor: React.RefObject<HTMLElement>, open: boolean, fixed?: { width: number; height: number }): React.CSSProperties {
-  const [style, setStyle] = useState<React.CSSProperties>({ visibility: 'hidden' });
-  const fw = fixed?.width, fh = fixed?.height;
-  useLayoutEffect(() => {
-    if (!open) return;
-    const place = () => {
-      const el = anchor.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const screenH = window.visualViewport?.height ?? window.innerHeight; // shrinks when a phone keyboard opens
-      const below = screenH - r.bottom - MENU_GAP - MENU_EDGE;
-      const above = r.top - MENU_GAP - MENU_EDGE;
-      if (fw !== undefined && fh !== undefined) {
-        const top = below < fh && above > below ? r.top - MENU_GAP - fh : r.bottom + MENU_GAP;
-        setStyle({ left: Math.max(MENU_EDGE, Math.min(r.left, window.innerWidth - fw - MENU_EDGE)), top: Math.max(MENU_EDGE, Math.min(top, screenH - fh - MENU_EDGE)) });
-        return;
-      }
-      const up = below < MENU_MIN && above > below;
-      setStyle({
-        left: r.left, width: r.width, maxHeight: Math.max(Math.min(up ? above : below, MENU_MAX), 80),
-        ...(up ? { bottom: window.innerHeight - r.top + MENU_GAP } : { top: r.bottom + MENU_GAP }),
-      });
-    };
-    place();
-    window.addEventListener('scroll', place, true); // capture: also catches the popup's own scrolling
-    window.addEventListener('resize', place);
-    window.visualViewport?.addEventListener('resize', place);
-    return () => {
-      window.removeEventListener('scroll', place, true);
-      window.removeEventListener('resize', place);
-      window.visualViewport?.removeEventListener('resize', place);
-    };
-  }, [anchor, open, fw, fh]);
-  return style;
-}
-
 export interface ComboOption { value: number | string; label: string; hint?: string }
 export function Combo({ value, onChange, options, placeholder = 'Select…', allowClear, autoFocus }: { value: number | string | null | undefined; onChange: (v: any, opt?: ComboOption) => void; options: ComboOption[]; placeholder?: string; allowClear?: boolean; autoFocus?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -451,8 +404,6 @@ export function Combo({ value, onChange, options, placeholder = 'Select…', all
   const [hl, setHl] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const inp = useRef<HTMLInputElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
-  const menuStyle = useFloatingPosition(inp, open);
   const sel = options.find((o) => String(o.value) === String(value ?? ''));
   const list = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -461,7 +412,7 @@ export function Combo({ value, onChange, options, placeholder = 'Select…', all
 
   useEffect(() => {
     if (!open) return;
-    const h = (e: MouseEvent) => { const t = e.target as Node; if (ref.current && !ref.current.contains(t) && !menu.current?.contains(t)) { setOpen(false); setQ(''); } };
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQ(''); } };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [open]);
@@ -490,16 +441,15 @@ export function Combo({ value, onChange, options, placeholder = 'Select…', all
       {allowClear && sel && (
         <button type="button" className="icon-btn" style={{ position: 'absolute', right: 4, top: 4, width: 36, height: 36 }} onClick={() => { onChange('', undefined); setQ(''); }} aria-label="Clear"><Icon name="x" size={15} /></button>
       )}
-      {open && createPortal(
-        <div className="combo-menu" ref={menu} style={menuStyle} onMouseDown={(e) => e.stopPropagation()}>
+      {open && (
+        <div className="combo-menu">
           {list.length === 0 && <div className="combo-empty">No matches</div>}
           {list.map((o, i) => (
             <div key={o.value} className={cx('combo-opt', i === hl && 'hl', String(o.value) === String(value) && 'sel')} onMouseEnter={() => setHl(i)} onMouseDown={(e) => { e.preventDefault(); pick(o); }}>
               <span>{o.label}</span>{o.hint && <small>{o.hint}</small>}
             </div>
           ))}
-        </div>,
-        document.body,
+        </div>
       )}
     </div>
   );

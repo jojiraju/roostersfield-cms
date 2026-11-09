@@ -1,45 +1,33 @@
 import { z } from 'zod';
+import { all } from '../db.ts';
 import { badRequest } from '../errors.ts';
-import { importDailyWorkbook } from '../importer/daily.ts';
-import { createFlock, dailyReport, flockDetail, saveDay, updateFlock } from '../services/daily.ts';
 import type { Router } from '../http.ts';
+import { batchDaily, dailyOverview, saveDaily, saveDailyBulk, stdChart } from '../services/daily.ts';
+import { importDailyWorkbook } from '../importer/daily.ts';
+import { today } from '../util.ts';
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Choose a date');
-const count = z.coerce.number().min(0);
+const iso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a date like 2026-11-09');
+const num = z.number().finite().nonnegative().nullable().optional();
+const entry = z.object({ mortality: num, saleQty: num, saleWeight: num, feedIn: num, feedUsed: num, note: z.string().max(300).nullable().optional() });
 
 export function dailyRoutes(r: Router) {
-  r.get('/api/daily', async ({ query }) => await dailyReport(query.get('date') ? isoDate.parse(query.get('date')) : undefined));
-  r.get('/api/daily/flocks/:id', async ({ params }) => await flockDetail(Number(params.id)));
+  r.get('/api/daily', async ({ query }) => dailyOverview(iso.parse(query.get('date') || today())));
+  r.get('/api/daily/batch/:id', async ({ params }) => batchDaily(Number(params.id)));
+  r.get('/api/std-chart', async () => stdChart());
+  r.get('/api/daily/batches', async () => all(`SELECT b.id, f.name farm, b.batch_no, b.status, b.placement_date FROM batches b JOIN farms f ON f.id=b.farm_id WHERE b.placement_date IS NOT NULL AND COALESCE(b.partial,0)=0 ORDER BY b.placement_date DESC LIMIT 200`));
 
-  r.post('/api/daily/flocks', async ({ body }) => {
-    const d = z.object({
-      name: z.string().trim().min(2, 'Choose the farm').max(80), placementDate: isoDate,
-      placedQty: z.coerce.number().positive('Enter the chicks billed'), grossQty: z.coerce.number().positive('Enter the chicks counted'),
-      notes: z.string().trim().max(300).nullable().optional(),
-    }).parse(body);
-    return await createFlock({ ...d, name: d.name.toUpperCase() });
+  r.put('/api/daily/:batchId/:date', async ({ params, body, user }) => {
+    await saveDaily(Number(params.batchId), iso.parse(params.date), entry.parse(body ?? {}), user!.sub);
+    return { ok: true };
   });
-
-  r.patch('/api/daily/flocks/:id', async ({ params, body }) => {
-    const d = z.object({
-      status: z.enum(['running', 'closed']).optional(), placementDate: isoDate.optional(), placedQty: z.coerce.number().positive().optional(),
-      grossQty: z.coerce.number().positive().optional(), notes: z.string().trim().max(300).nullable().optional(),
-    }).parse(body);
-    await updateFlock(Number(params.id), d);
+  r.post('/api/daily/bulk', async ({ body, user }) => {
+    const d = z.object({ date: iso, items: z.array(entry.extend({ batchId: z.number().int() })).max(300) }).parse(body);
+    await saveDailyBulk(d.date, d.items, user!.sub);
+    return { ok: true, saved: d.items.length };
   });
-
-  r.put('/api/daily/flocks/:id/days/:date', async ({ params, body }) => {
-    const d = z.object({
-      mortality: count.default(0), saleQty: count.default(0), saleKg: count.default(0),
-      feedIn: z.coerce.number().default(0), // negative when bags go back or move to another farm
-      feedUsed: count.default(0), avgWeightG: count.nullable().default(null),
-    }).parse(body);
-    await saveDay(Number(params.id), isoDate.parse(params.date), d);
-  });
-
-  r.post('/api/import/daily-report', async ({ readRaw }) => {
+  r.post('/api/import/daily', async ({ readRaw, user }) => {
     const buf = await readRaw();
-    if (buf.length < 1000) throw badRequest('That file looks empty. Choose the daily report workbook (.xlsx).');
-    return await importDailyWorkbook(buf);
+    if (buf.length < 1000) throw badRequest('That file looks empty. Choose the Daily Report workbook (.xlsx).');
+    return await importDailyWorkbook(buf, { userId: user!.sub });
   }, { admin: true, raw: true });
 }

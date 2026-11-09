@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, feedTypes } from '../seed.ts';
 import { listBatches } from '../services/batches.ts';
 import fs from 'node:fs';
 import path from 'node:path';
-import { importWorkbook } from '../importer/excel.ts';
+import { importWorkbook, syncWorkbook } from '../importer/excel.ts';
 
 const d = (v: string | null) => v || undefined;
 
@@ -73,7 +73,9 @@ export function insightRoutes(r: Router) {
     if (buf.length < 1000) throw badRequest('That file looks empty. Choose the Rooster’s Field Excel workbook (.xlsx).');
     const replace = query.get('replace') === '1';
     const hasData = ((await get<{ n: number }>(`SELECT COUNT(*) n FROM vouchers`))?.n ?? 0) > 0;
-    if (hasData && !replace) throw badRequest('There is already data in the system. Tick “replace existing data” to import over it (a backup is taken first).');
+    // Update: add what is new in the workbook, apply corrections, keep everything else.
+    if (hasData && !replace && query.get('mode') === 'update') return { mode: 'update', ...(await syncWorkbook(buf, { userId: user!.sub })) };
+    if (hasData && !replace) throw badRequest('There is already data in the system. Choose “Update” to add the new entries, or “Replace everything” to start over (a backup is taken first).');
     return await importWorkbook(buf, { replace, userId: user!.sub });
   }, { admin: true, raw: true });
 

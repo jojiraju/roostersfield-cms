@@ -54,6 +54,7 @@ function CompanyCard() {
           <Field label="GSTIN"><Input value={f.gstin} onChange={(e) => set('gstin')(e.target.value.toUpperCase())} /></Field>
           <Field label="Feed bag weight"><NumInput value={f.feed_bag_kg} onChange={set('feed_bag_kg')} suffix="kg" /></Field>
           <Field label="Harvest alert after"><NumInput value={f.harvest_alert_days} onChange={set('harvest_alert_days')} suffix="days" decimals={false} /></Field>
+          <Field label="Extra chicks supplied" help="Hatcheries add a few free birds; daily reports count them"><NumInput value={f.chick_extra_pct} onChange={set('chick_extra_pct')} suffix="%" /></Field>
           <Field label="Integration ₹ per kg"><NumInput value={f.integration_rate_per_kg} onChange={set('integration_rate_per_kg')} prefix="₹" /></Field>
           <Field label="Integration ₹ per bird (broast)"><NumInput value={f.integration_rate_per_bird_broast} onChange={set('integration_rate_per_bird_broast')} prefix="₹" /></Field>
           <Field label="Feed types" className="full" help="Separate with commas"><Input value={f.feed_types} onChange={(e) => set('feed_types')(e.target.value)} /></Field>
@@ -129,28 +130,30 @@ function DataCard() {
   const toast = useToast();
   const stats = useQuery<any>(['stats'], () => api('/system/stats'));
   const file = useRef<HTMLInputElement>(null);
-  const [replace, setReplace] = useState(false);
+  const [mode, setMode] = useState<'update' | 'replace'>('update');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState('');
-  const dailyFile = useRef<HTMLInputElement>(null);
-  const [dailyBusy, setDailyBusy] = useState(false);
-  const [dailyResult, setDailyResult] = useState<any>(null);
-  const [dailyErr, setDailyErr] = useState('');
+  const dfile = useRef<HTMLInputElement>(null);
+  const [dbusy, setDbusy] = useState(false);
+  const [dres, setDres] = useState<any>(null);
+  const [derr, setDerr] = useState('');
   const s = stats.data;
-
   const uploadDaily = async (f: File) => {
-    setDailyBusy(true); setDailyErr(''); setDailyResult(null);
+    setDbusy(true); setDerr(''); setDres(null);
     try {
-      setDailyResult(await api('/import/daily-report', { method: 'POST', raw: await f.arrayBuffer() }));
-      clearCache(); toast('Daily report imported');
-    } catch (e) { setDailyErr((e as Error).message); } finally { setDailyBusy(false); if (dailyFile.current) dailyFile.current.value = ''; }
+      const r = await api('/import/daily', { method: 'POST', raw: await f.arrayBuffer() });
+      setDres(r); clearCache(); toast('Daily reports imported');
+    } catch (e) { setDerr((e as Error).message); } finally { setDbusy(false); if (dfile.current) dfile.current.value = ''; }
   };
+  const hasData = !!s && s.vouchers > 0;
+
   const upload = async (f: File) => {
     setBusy(true); setErr(''); setResult(null);
     try {
-      const r = await api('/import/excel?replace=' + (replace ? '1' : '0'), { method: 'POST', raw: await f.arrayBuffer() });
-      setResult(r); clearCache(); toast('Excel imported');
+      const q = hasData ? (mode === 'update' ? '?mode=update' : '?replace=1') : '?replace=0';
+      const r = await api('/import/excel' + q, { method: 'POST', raw: await f.arrayBuffer() });
+      setResult(r); clearCache(); toast(r.mode === 'update' ? 'Excel updated' : 'Excel imported');
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); if (file.current) file.current.value = ''; }
   };
   return (
@@ -163,20 +166,39 @@ function DataCard() {
           <Button icon="download" onClick={() => downloadFile('/system/backup', 'roosters-field-backup.db').catch((e) => toast(e.message, 'error'))}>Download</Button>
         </div>
         <hr style={{ border: 0, borderTop: '1px solid var(--line-soft)', margin: '18px 0' }} />
-        <b>Import from Excel</b>
+        <b>{hasData ? 'Update from Excel' : 'Import from Excel'}</b>
         <div className="small muted mb-8">Upload the Rooster’s Field workbook (.xlsx) with the JOURNALS sheet.</div>
-        {s && s.vouchers > 0 && <label className="checkbox mb-8"><input type="checkbox" checked={replace} onChange={(e) => setReplace(e.target.checked)} />Replace existing data (a backup is saved first)</label>}
+        {hasData && (
+          <div className="col mb-8" style={{ gap: 6 }}>
+            <label className="checkbox"><input type="radio" name="impmode" checked={mode === 'update'} onChange={() => setMode('update')} /><span><b>Add new entries</b> — keeps everything already here, adds what is new and applies corrected amounts</span></label>
+            <label className="checkbox"><input type="radio" name="impmode" checked={mode === 'replace'} onChange={() => setMode('replace')} /><span><b>Replace everything</b> — start over from the workbook, including daily reports (a backup is saved first)</span></label>
+          </div>
+        )}
         <input ref={file} type="file" accept=".xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-        <Button icon="upload" loading={busy} onClick={() => file.current?.click()} disabled={!!s && s.vouchers > 0 && !replace}>Choose Excel file</Button>
+        <Button icon="upload" loading={busy} onClick={() => file.current?.click()}>Choose Excel file</Button>
         {err && <div className="form-error mt-12">{err}</div>}
-        {result && <div className="mt-12"><Alert tone="ok">Imported {num(result.vouchers ?? 0)} entries{result.farms !== undefined ? `, ${num(result.farms)} farms` : ''}{result.batches !== undefined ? `, ${num(result.batches)} batches` : ''}.{result.warnings?.length ? ` ${result.warnings.length} notes — see below.` : ''}</Alert>{result.warnings?.length > 0 && <ul className="small muted" style={{ maxHeight: 140, overflow: 'auto' }}>{result.warnings.slice(0, 30).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul>}</div>}
+        {result?.mode === 'update' && (
+          <div className="mt-12">
+            <Alert tone="ok">{result.added || result.corrected ? <>Added {num(result.added)} new entries{result.corrected ? `, corrected ${num(result.corrected)}` : ''}{result.newBatches ? `, started ${num(result.newBatches)} new batches` : ''}. {num(result.unchanged)} entries were already up to date.</> : <>Already up to date — nothing new in this workbook.</>}</Alert>
+            {result.keptNotInWorkbook > 0 && <div className="small muted mt-8">{num(result.keptNotInWorkbook)} entries here are no longer in the workbook. They were kept, not deleted: {result.details?.notInWorkbook?.slice(0, 6).map((x: string) => x.replace('|', ' · ')).join('; ')}.</div>}
+            {result.details?.corrected?.length > 0 && <details className="small muted mt-8"><summary>Corrected entries ({result.details.corrected.length})</summary><ul style={{ maxHeight: 140, overflow: 'auto' }}>{result.details.corrected.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul></details>}
+            {result.warnings?.length > 0 && <details className="small muted mt-8"><summary>{result.warnings.length} notes</summary><ul style={{ maxHeight: 140, overflow: 'auto' }}>{result.warnings.slice(0, 30).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul></details>}
+          </div>
+        )}
+        {result && result.mode !== 'update' && <div className="mt-12"><Alert tone="ok">Imported {num(result.vouchers ?? 0)} entries{result.farms !== undefined ? `, ${num(result.farms)} farms` : ''}{result.batches !== undefined ? `, ${num(result.batches)} batches` : ''}.{result.warnings?.length ? ` ${result.warnings.length} notes — see below.` : ''}</Alert>{result.warnings?.length > 0 && <ul className="small muted" style={{ maxHeight: 140, overflow: 'auto' }}>{result.warnings.slice(0, 30).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul>}</div>}
         <hr style={{ border: 0, borderTop: '1px solid var(--line-soft)', margin: '18px 0' }} />
-        <b>Import daily report</b>
-        <div className="small muted mb-8">Upload the daily report workbook (.xlsx) with the farm tabs. The accounts are not changed. For a date in both, the workbook replaces what is here.</div>
-        <input ref={dailyFile} type="file" accept=".xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && uploadDaily(e.target.files[0])} />
-        <Button icon="upload" loading={dailyBusy} onClick={() => dailyFile.current?.click()}>Choose daily report</Button>
-        {dailyErr && <div className="form-error mt-12">{dailyErr}</div>}
-        {dailyResult && <div className="mt-12"><Alert tone="ok">Imported {num(dailyResult.flocks)} flocks and {num(dailyResult.days)} days, up to {fmtDate(dailyResult.asOf)}.{dailyResult.skipped?.length ? ` Skipped: ${dailyResult.skipped.join('; ')}.` : ''}</Alert></div>}
+        <b>Import farm daily reports</b>
+        <div className="small muted mb-8">Upload the “Daily report” workbook (one sheet per farm). Each sheet is matched to its batch by farm name and placement date. Days you already edited here are kept.</div>
+        <input ref={dfile} type="file" accept=".xlsx,.xlsm" hidden onChange={(e) => e.target.files?.[0] && uploadDaily(e.target.files[0])} />
+        <Button icon="upload" loading={dbusy} onClick={() => dfile.current?.click()}>Choose daily report file</Button>
+        {derr && <div className="form-error mt-12">{derr}</div>}
+        {dres && (
+          <div className="mt-12">
+            <Alert tone="ok">Imported {num(dres.daysImported)} days across {num(dres.matched?.length ?? 0)} of {num(dres.sheets)} farm sheets.{dres.keptEdited ? ` ${num(dres.keptEdited)} days you edited here were kept.` : ''}</Alert>
+            {dres.unmatched?.length > 0 && <Alert tone="warn">{dres.unmatched.length} sheet{dres.unmatched.length === 1 ? '' : 's'} could not be matched to a batch: {dres.unmatched.map((x: any) => `${x.sheet} (${x.reason})`).join('; ')}</Alert>}
+            {dres.warnings?.length > 0 && <details className="small muted mt-8"><summary>{dres.warnings.length} notes</summary><ul style={{ maxHeight: 140, overflow: 'auto' }}>{dres.warnings.slice(0, 30).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul></details>}
+          </div>
+        )}
       </div>
     </Card>
   );

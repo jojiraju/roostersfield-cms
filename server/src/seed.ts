@@ -1,3 +1,4 @@
+import { STD_CHART } from './std-chart.ts';
 import { all, get, getSetting, initDb, run, setSetting } from './db.ts';
 import { config } from './config.ts';
 import { hashPassword } from './security.ts';
@@ -15,6 +16,7 @@ export const DEFAULT_SETTINGS: Record<string, string> = {
   integration_rate_per_kg: '6.5',
   integration_rate_per_bird_broast: '13',
   harvest_alert_days: '33',
+  chick_extra_pct: '2',
   feed_types: JSON.stringify(['PRESTARTER', 'STARTER FEED', 'FINISHER']),
   next_bill_no: '1',
 };
@@ -51,6 +53,9 @@ export async function addAccount(name: string, category: Category, opts: { subty
 
 export async function seed() {
   await initDb();
+  if (((await get<{ n: number }>('SELECT COUNT(*) n FROM std_chart'))?.n ?? 0) === 0) {
+    for (const [day, feed, weight, fcr] of STD_CHART) await run('INSERT INTO std_chart(day,feed_g,weight_g,fcr) VALUES(?,?,?,?)', day, feed, weight, fcr);
+  }
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) {
     if (await get('SELECT 1 FROM settings WHERE key=?', k) === undefined) await setSetting(k, v);
   }

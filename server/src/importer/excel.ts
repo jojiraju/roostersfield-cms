@@ -1,11 +1,13 @@
 import { badRequest } from '../errors.ts';
 import { importJournal } from './core.ts';
+import { syncJournal } from './sync.ts';
+import type { SyncReport } from './sync.ts';
 import type { ImportReport, JournalRow } from './core.ts';
 import { num } from '../util.ts';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-export function toIso(v: unknown): string | null {
+function toIso(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null;
   if (typeof v === 'number') {
     if (v < 20000 || v > 80000) return null;
@@ -59,4 +61,10 @@ export async function importWorkbook(buf: Buffer, opts: { replace: boolean; user
   const { rows, tb } = await parseWorkbook(buf);
   if (!rows.length) throw badRequest('No journal rows were found in the JOURNALS sheet.');
   return await importJournal(rows, tb, opts);
+}
+
+export async function syncWorkbook(buf: Buffer, opts: { userId: number | null }): Promise<SyncReport> {
+  const { rows, tb } = await parseWorkbook(buf);
+  if (!rows.length) throw badRequest('No journal rows were found in the JOURNALS sheet.');
+  return await syncJournal(rows, tb, opts);
 }

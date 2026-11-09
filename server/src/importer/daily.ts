@@ -1,102 +1,123 @@
 /**
- * Reads the DAILY REPORT workbook: one tab per flock, with a day-by-day table under a "Date" header.
- * Only the figures people type are stored (deaths, sales, feed); everything the tabs calculate is recalculated
- * by services/flockMetrics.ts. Importing never touches the accounts.
+ * Daily Report workbook → daily_logs.
+ * Each farm sheet is one flock: a header block, then one row per day (Date, Mortality, Sale Qty, Sale Weight, Purchase = feed bags in,
+ * "Taiken" = feed bags used). Everything else in the sheet is a formula, so only those inputs are read.
+ * A sheet is attached to the batch placed within 4 days of its first date on a farm with a similar name; sheets that match nothing are listed, not guessed.
  */
-import { all, backupLocal, get, run, tx } from '../db.ts';
+import { all, get, run, tx } from '../db.ts';
 import { badRequest } from '../errors.ts';
-import { daysBetween, today } from '../util.ts';
-import { toIso } from './excel.ts';
+import { today } from '../util.ts';
 
-export interface ParsedDay { date: string; mortality: number; sale_qty: number; sale_kg: number; feed_in: number; feed_used: number; avg_weight_g: number | null }
-export interface ParsedFlock { name: string; hidden: boolean; placementDate: string; placedQty: number | null; grossQty: number; days: ParsedDay[] }
-export interface DailyImportReport { flocks: number; created: number; updated: number; days: number; running: number; closed: number; asOf: string | null; skipped: string[]; backup: string | null }
+export interface DailySheet { name: string; firstDate: string; rows: Array<{ date: string; mortality: number | null; saleQty: number | null; saleWeight: number | null; feedIn: number | null; feedUsed: number | null }>; std: Array<[number, number, number, number]> }
+export interface DailyImportReport {
+  sheets: number; matched: Array<{ sheet: string; farm: string; batchNo: number; placement: string; days: number }>; unmatched: Array<{ sheet: string; firstDate: string; reason: string }>;
+  daysImported: number; daysSkippedFuture: number; keptEdited: number; standardChart: boolean; warnings: string[];
+}
 
-const STALE_DAYS = 7;
-const n0 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const pad = (n: number) => String(n).padStart(2, '0');
+function toIso(v: unknown): string | null {
+  if (typeof v === 'number') {
+    if (v < 20000 || v > 80000) return null;
+    const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(v + 1e-6) * 86400000);
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  }
+  if (v instanceof Date) return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}`;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? '').trim());
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+const numOrNull = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  const s = String(v ?? '').trim();
+  if (!s || s.startsWith('#')) return null;
+  const n = Number(s.replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+const text = (v: unknown) => String(v ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
 
-export async function parseDailyWorkbook(buf: Buffer): Promise<{ flocks: ParsedFlock[]; skipped: string[] }> {
+export async function parseDailyWorkbook(buf: Buffer): Promise<DailySheet[]> {
   const XLSX = await import('xlsx');
   let wb: import('xlsx').WorkBook;
-  try { wb = XLSX.read(buf, { type: 'buffer', cellDates: false, cellFormula: true, cellHTML: false, cellStyles: false }); }
-  catch { throw badRequest('Could not read that file. Please upload the .xlsx workbook.'); }
-  if (!wb.SheetNames.some((n) => n.trim().toUpperCase() === 'DAILY REPORT')) throw badRequest(`This workbook has no "DAILY REPORT" sheet. Sheets found: ${wb.SheetNames.slice(0, 8).join(', ')}`);
-
-  const flocks: ParsedFlock[] = [];
-  const skipped: string[] = [];
-  for (const sheetName of wb.SheetNames) {
-    if (/^(DAILY )?REPORT$/i.test(sheetName.trim())) continue;
-    const ws = wb.Sheets[sheetName];
-    const cell = (col: string, row: number) => ws[`${col}${row}`] as { v?: unknown; f?: string } | undefined;
-    const val = (col: string, row: number) => cell(col, row)?.v;
-    let header = 0;
-    for (let r = 1; r <= 10 && !header; r++) if (String(val('B', r) ?? '').trim().toUpperCase() === 'DATE') header = r;
-    if (!header) { skipped.push(`${sheetName}: no day-by-day table`); continue; }
-
-    // Two tab layouts: F4 is the chick count in both; the plain layout also has the billed count in D4.
-    const grossQty = n0(val('F', header - 1));
-    if (grossQty <= 0) { skipped.push(`${sheetName}: no placement quantity`); continue; }
-    const billed = n0(val('D', header - 1));
-    const days: ParsedDay[] = [];
-    let placementDate: string | null = null;
-    for (let r = header + 1; ; r++) {
-      const date = toIso(val('B', r));
-      if (!date) break;
-      placementDate ??= date;
-      const weighed = cell('Q', r);
-      const d: ParsedDay = {
-        date, mortality: n0(val('D', r)), sale_qty: n0(val('F', r)), sale_kg: n0(val('H', r)), feed_in: n0(val('I', r)), feed_used: n0(val('J', r)),
-        avg_weight_g: !weighed?.f && n0(weighed?.v) > 0 ? n0(weighed?.v) : null, // on some tabs this column is a formula, not a weighing
-      };
-      if (d.mortality || d.sale_qty || d.sale_kg || d.feed_in || d.feed_used || d.avg_weight_g) days.push(d);
+  try { wb = XLSX.read(buf, { type: 'buffer', cellDates: false, cellFormula: false, cellHTML: false, cellStyles: false }); }
+  catch { throw badRequest('Could not read that file. Please upload the Daily Report .xlsx workbook.'); }
+  const out: DailySheet[] = [];
+  for (const name of wb.SheetNames) {
+    const data = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1, raw: true, defval: null });
+    let h = -1;
+    for (let i = 0; i < Math.min(12, data.length); i++) if (text(data[i]?.[1]) === 'DATE' && text(data[i]?.[3]).startsWith('MORTALITY')) { h = i; break; }
+    if (h < 0) continue; // DAILY REPORT / REPORT summary sheets
+    const head = (data[h] as unknown[]).map(text);
+    const col = (re: RegExp, fb: number) => { const i = head.findIndex((x) => re.test(x)); return i >= 0 ? i : fb; };
+    const c = { date: 1, mort: col(/^MORTALITY/, 3), saleQty: col(/^SALE QTY/, 5), saleWt: col(/^SALE W/, 7), purchase: col(/^PURCHASE/, 8), taken: col(/^TAIKEN|^TAKEN|^USED/, 9), stdFeed: col(/^STD G/, 12), stdWt: col(/^STD W/, 17), stdFcr: col(/^STD FCR/, 18) };
+    const rows: DailySheet['rows'] = []; const std: DailySheet['std'] = [];
+    let day = 0;
+    for (let i = h + 1; i < data.length; i++) {
+      const r = data[i] as unknown[];
+      const date = toIso(r?.[c.date]);
+      if (!date) continue;
+      rows.push({ date, mortality: numOrNull(r[c.mort]), saleQty: numOrNull(r[c.saleQty]), saleWeight: numOrNull(r[c.saleWt]), feedIn: numOrNull(r[c.purchase]), feedUsed: numOrNull(r[c.taken]) });
+      const f = numOrNull(r[c.stdFeed]), w = numOrNull(r[c.stdWt]), q = numOrNull(r[c.stdFcr]);
+      if (f !== null && w !== null && q !== null) std.push([day, f, w, q]);
+      day++;
     }
-    if (!placementDate) { skipped.push(`${sheetName}: no dates`); continue; }
-    const hidden = !!wb.Workbook?.Sheets?.find((s) => s.name === sheetName)?.Hidden;
-    flocks.push({ name: sheetName.trim().toUpperCase().replace(/\s+/g, ' '), hidden, placementDate, placedQty: billed > 0 ? billed : grossQty, grossQty, days });
+    if (rows.length) out.push({ name, firstDate: rows[0].date, rows, std });
   }
-  if (!flocks.length) throw badRequest('No farm tabs with a day-by-day table were found in this workbook.');
-  return { flocks, skipped };
+  if (!out.length) throw badRequest('No farm sheets were found. Each farm sheet needs a header row with "Date" and "Mortality".');
+  return out;
 }
 
-/** Hidden tabs and tabs with nothing recent are finished flocks. A status changed in the app is kept on re-import. */
-export function initialStatus(f: ParsedFlock, asOf: string | null, now: string): 'running' | 'closed' {
-  if (f.hidden) return 'closed';
-  const last = f.days.reduce<string>((m, d) => (d.date <= now && d.date > m ? d.date : m), f.placementDate);
-  return asOf && daysBetween(last, asOf) > STALE_DAYS ? 'closed' : 'running';
+function lev(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
 }
+const words = (s: string) => text(s).replace(/[^A-Z0-9 ]/g, '').split(' ').filter((w) => w && w !== 'FARM');
+const tail = (s: string) => { const w = text(s).split(' '); return /^\d+$/.test(w[w.length - 1]) ? w[w.length - 1] : '1'; };
+const gap = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86400000;
 
-export async function importDailyWorkbook(buf: Buffer): Promise<DailyImportReport> {
-  const { flocks, skipped } = await parseDailyWorkbook(buf);
+export async function importDailySheets(sheets: DailySheet[], opts: { userId: number | null }): Promise<DailyImportReport> {
+  const warnings: string[] = [];
+  const batches = await all<{ id: number; batch_no: number; placement_date: string; farm: string }>(
+    `SELECT b.id,b.batch_no,b.placement_date,f.name farm FROM batches b JOIN farms f ON f.id=b.farm_id WHERE b.placement_date IS NOT NULL AND COALESCE(b.partial,0)=0`);
   const now = today();
-  // Hidden tabs are old flocks, and an old tab with wrong dates must not decide what "latest" means.
-  const asOf = flocks.filter((f) => !f.hidden).flatMap((f) => f.days).reduce<string | null>((m, d) => (d.date <= now && (!m || d.date > m) ? d.date : m), null);
-  const backup = await backupLocal('before-daily-import');
-  let created = 0, updated = 0, dayCount = 0;
+  const rep: DailyImportReport = { sheets: sheets.length, matched: [], unmatched: [], daysImported: 0, daysSkippedFuture: 0, keptEdited: 0, standardChart: false, warnings };
 
   await tx(async () => {
-    for (const f of flocks) {
-      const existing = await get<{ id: number }>('SELECT id FROM flocks WHERE name=? AND placement_date=?', f.name, f.placementDate);
-      let id: number;
-      if (existing) {
-        id = existing.id; updated++;
-        await run('UPDATE flocks SET placed_qty=?, gross_qty=? WHERE id=?', f.placedQty, f.grossQty, id);
-        await run(`DELETE FROM flock_days WHERE flock_id=? AND source='excel'`, id); // days entered in the app stay, unless the workbook has that date too
-      } else {
-        id = (await run(`INSERT INTO flocks(name,placement_date,placed_qty,gross_qty,status,source) VALUES(?,?,?,?,?,'excel')`, f.name, f.placementDate, f.placedQty, f.grossQty, initialStatus(f, asOf, now))).id;
-        created++;
+    for (const sh of sheets) {
+      const w0 = words(sh.name)[0] ?? '';
+      const cands = batches
+        .map((b) => ({ b, g: gap(b.placement_date, sh.firstDate), d: lev(w0, words(b.farm)[0] ?? ''), full: lev(words(sh.name).join(''), words(b.farm).join('')), t: tail(sh.name) === tail(b.farm) ? 0 : 1 }))
+        .filter((x) => x.g <= 4 && x.d <= 2)
+        .sort((a, z) => a.t - z.t || a.full - z.full || a.g - z.g);
+      if (!cands.length) { rep.unmatched.push({ sheet: sh.name, firstDate: sh.firstDate, reason: 'No batch for this farm was placed around that date in the accounts' }); continue; }
+      const b = cands[0].b;
+      let days = 0;
+      for (const r of sh.rows) {
+        if (r.mortality === null && r.saleQty === null && r.saleWeight === null && r.feedIn === null && r.feedUsed === null) continue;
+        if (r.date > now) { rep.daysSkippedFuture++; continue; }
+        const res = await run(
+          `INSERT INTO daily_logs(batch_id,date,mortality,sale_qty,sale_weight,feed_in,feed_used,source,updated_by) VALUES(?,?,?,?,?,?,?,'import',?)
+           ON CONFLICT(batch_id,date) DO UPDATE SET mortality=excluded.mortality, sale_qty=excluded.sale_qty, sale_weight=excluded.sale_weight, feed_in=excluded.feed_in, feed_used=excluded.feed_used, updated_by=excluded.updated_by, updated_at=datetime('now')
+           WHERE daily_logs.source='import'`, b.id, r.date, r.mortality, r.saleQty, r.saleWeight, r.feedIn, r.feedUsed, opts.userId);
+        if (res.changes) { days++; rep.daysImported++; } else rep.keptEdited++;
       }
-      // One statement per batch of rows: thousands of single inserts are slow against the hosted database.
-      for (let i = 0; i < f.days.length; i += 40) {
-        const chunk = f.days.slice(i, i + 40);
-        await run(`INSERT OR REPLACE INTO flock_days(flock_id,date,mortality,sale_qty,sale_kg,feed_in,feed_used,avg_weight_g,source) VALUES ${chunk.map(() => `(?,?,?,?,?,?,?,?,'excel')`).join(',')}`,
-          ...chunk.flatMap((d) => [id, d.date, d.mortality, d.sale_qty, d.sale_kg, d.feed_in, d.feed_used, d.avg_weight_g]));
-      }
-      dayCount += f.days.length;
+      rep.matched.push({ sheet: sh.name, farm: b.farm, batchNo: b.batch_no, placement: b.placement_date, days });
+    }
+    // standard chart: take the first sheet that carries one
+    const std = sheets.find((s) => s.std.length >= 30)?.std;
+    if (std && ((await get<{ n: number }>('SELECT COUNT(*) n FROM std_chart'))?.n ?? 0) < 1) {
+      for (const [day, f, w, q] of std) await run('INSERT OR REPLACE INTO std_chart(day,feed_g,weight_g,fcr) VALUES(?,?,?,?)', day, f, w, q);
+      rep.standardChart = true;
     }
   });
-  const counts = await all<{ status: string; n: number }>('SELECT status, COUNT(*) n FROM flocks GROUP BY status');
-  return {
-    flocks: flocks.length, created, updated, days: dayCount, asOf, skipped, backup,
-    running: counts.find((c) => c.status === 'running')?.n ?? 0, closed: counts.find((c) => c.status === 'closed')?.n ?? 0,
-  };
+  if (rep.daysSkippedFuture) warnings.push(`${rep.daysSkippedFuture} rows dated after today were left out (the sheets are pre-filled with dates up to 52 days ahead).`);
+  return rep;
+}
+
+export async function importDailyWorkbook(buf: Buffer, opts: { userId: number | null }) {
+  return importDailySheets(await parseDailyWorkbook(buf), opts);
 }

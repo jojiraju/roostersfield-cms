@@ -112,32 +112,29 @@ CREATE TABLE IF NOT EXISTS cash_counts (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Day-by-day flock records (the farm tabs of the DAILY REPORT workbook). Kept apart from the ledger on purpose:
--- no money moves here, and re-importing the JOURNALS sheet (which rebuilds farms and batches) leaves these alone.
--- A flock finds its farm and batch by name and placement date when it is read, so there is no foreign key to them.
-CREATE TABLE IF NOT EXISTS flocks (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL COLLATE NOCASE,
-  placement_date TEXT NOT NULL,
-  placed_qty REAL,              -- chicks billed
-  gross_qty REAL NOT NULL,      -- chicks counted, including the hatchery's extra (usually +2%)
-  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running','closed')),
-  source TEXT NOT NULL DEFAULT 'app',
-  notes TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE (name, placement_date)
-);
-
-CREATE TABLE IF NOT EXISTS flock_days (
-  flock_id INTEGER NOT NULL REFERENCES flocks(id) ON DELETE CASCADE,
+-- Daily farm reports (one row per batch per day). Only what is observed is stored; totals, alive birds and feed balance are computed.
+CREATE TABLE IF NOT EXISTS daily_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER NOT NULL REFERENCES batches(id),
   date TEXT NOT NULL,
-  mortality REAL NOT NULL DEFAULT 0,
-  sale_qty REAL NOT NULL DEFAULT 0,
-  sale_kg REAL NOT NULL DEFAULT 0,
-  feed_in REAL NOT NULL DEFAULT 0,    -- bags received (negative = returned or moved out)
-  feed_used REAL NOT NULL DEFAULT 0,  -- bags taken
-  avg_weight_g REAL,                  -- weighed sample, when one was taken
-  source TEXT NOT NULL DEFAULT 'app',
-  PRIMARY KEY (flock_id, date)
+  mortality INTEGER,
+  sale_qty INTEGER,
+  sale_weight REAL,
+  feed_in REAL,                  -- feed bags received that day
+  feed_used REAL,                -- feed bags used that day
+  note TEXT,
+  source TEXT NOT NULL DEFAULT 'app',   -- app | import
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(batch_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_date ON daily_logs(date);
+
+-- Standard growth chart by age in days (feed grams per bird, body weight grams, FCR).
+CREATE TABLE IF NOT EXISTS std_chart (
+  day INTEGER PRIMARY KEY,
+  feed_g REAL,
+  weight_g REAL,
+  fcr REAL
 );
 `;

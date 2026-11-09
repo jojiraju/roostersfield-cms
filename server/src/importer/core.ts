@@ -74,17 +74,14 @@ function inferCategory(name: string, tb: string | undefined, netDebit: number): 
 }
 
 interface Line { acct: number; farm: number | null; debit: number; credit: number; row: JournalRow; isFarmAccount: boolean }
-interface Group { key: string; rows: JournalRow[]; dr: number; cr: number }
+export interface Group { key: string; rows: JournalRow[]; dr: number; cr: number }
 interface MemBatch {
   farm: number; no: number; placement: string | null; firstDate: string; lastDate: string; chicksDate: string | null; chicksQty: number;
-  closed: boolean; closedDate: string | null; hasCogs: boolean; carry: boolean; saleDates: string[]; cogs: number; cost: number; integ: number; lastSale: string | null; realId?: number;
+  closed: boolean; closedDate: string | null; hasCogs: boolean; carry: boolean; saleDates: string[]; cogs: number; cost: number; integ: number; lastSale: string | null; realId?: number; isNew?: boolean; touchedChicks?: boolean; wasClosed?: boolean; promoted?: boolean;
 }
 
-export async function importJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { replace: boolean; userId: number | null }): Promise<ImportReport> {
-  const warnings: string[] = [];
-  const warn = (m: string) => { if (warnings.length < 60) warnings.push(m); };
-
-  // --- 0. clean rows & repair dates
+/** Drops empty/zero lines, nets two-sided lines and repairs obviously wrong years. */
+export function cleanRows(allRows: JournalRow[], warn: (m: string) => void): JournalRow[] {
   const rows: JournalRow[] = [];
   let prev: string | null = null;
   const yearCount = new Map<string, number>();
@@ -110,8 +107,11 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     prev = d;
     rows.push({ ...r, date: d });
   }
+  return rows;
+}
 
-  // --- 1. discover farm names (accounts that look like farms and carry entries)
+/** Finds the farm accounts in a journal ("<name> FARM <n>") and matches spelling variants of them. */
+export function farmResolver(rows: JournalRow[], tb: Record<string, string>) {
   const farmNames = new Map<string, string>(); // key -> display
   for (const r of rows) {
     const n = norm(r.account);
@@ -143,6 +143,38 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     farmCache.set(k, found);
     return found;
   };
+  return { farmNames, resolveFarmKey, isFarmAccount: (account: string) => FARM_RE.test(norm(account)) && resolveFarmKey(account) !== null };
+}
+
+/** Turns the flat journal into vouchers: consecutive rows that balance each other (or share a description) belong together. */
+export function groupRows(rows: JournalRow[]): Group[] {
+  const groups: Group[] = [];
+    let cur: Group | null = null;
+    for (const r of rows) {
+      const opening = norm(r.item) === 'OPENING' || /^OPENING BALANCE/.test(norm(r.description));
+      const k = opening ? 'OPENING' : norm(r.description);
+      let join = false;
+      if (cur) {
+        if (opening || cur.key === 'OPENING') join = opening && cur.key === 'OPENING';
+        else if (cur.dr === 0 || cur.cr === 0) join = Math.abs(daysBetween(cur.rows[0].date!, r.date!)) <= 3; // one-sided so far: wait for the partner row
+        else if (Math.abs(cur.dr - cur.cr) < 0.01) join = false; // balanced: voucher complete
+        else join = cur.key === k || norm(cur.rows[cur.rows.length - 1].description) === k; // both sides but off (typo): keep only same-description rows
+      }
+      if (cur && join) { cur.rows.push(r); cur.dr += r.debit; cur.cr += r.credit; }
+      else { cur = { key: k, rows: [r], dr: r.debit, cr: r.credit }; groups.push(cur); }
+    }
+  return groups;
+}
+
+export async function importJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { replace: boolean; userId: number | null; prepared?: boolean; context?: JournalRow[]; append?: boolean }): Promise<ImportReport> {
+  const warnings: string[] = [];
+  const warn = (m: string) => { if (warnings.length < 60) warnings.push(m); };
+
+  // --- 0. clean rows & repair dates
+  const rows: JournalRow[] = opts.prepared ? allRows : cleanRows(allRows, warn);
+
+  // --- 1. discover farm names (accounts that look like farms and carry entries)
+  const { farmNames, resolveFarmKey } = farmResolver(opts.context ?? rows, tb);
 
   // --- 2. wipe (replace mode) after taking a backup
   let backup: string | null = null;
@@ -152,7 +184,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
 
   return await tx(async () => {
     if (opts.replace) {
-      for (const t of ['entries', 'vouchers', 'cash_counts', 'batches', 'farms']) await run(`DELETE FROM ${t}`);
+      for (const t of ['entries', 'vouchers', 'cash_counts', 'daily_logs', 'batches', 'farms']) await run(`DELETE FROM ${t}`);
       await run('DELETE FROM accounts WHERE sys_key IS NULL');
     }
     const wip = await sysAccountId('wip'), salesId = await sysAccountId('sales'), cogsId = await sysAccountId('cogs'), suspenseId = await sysAccountId('suspense');
@@ -160,7 +192,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
 
     // net debit per account name (to classify unknown ones)
     const netDebit = new Map<string, number>();
-    for (const r of rows) netDebit.set(norm(r.account), (netDebit.get(norm(r.account)) ?? 0) + r.debit - r.credit);
+    for (const r of opts.context ?? rows) netDebit.set(norm(r.account), (netDebit.get(norm(r.account)) ?? 0) + r.debit - r.credit);
 
     const accCache = new Map<string, { id: number; category: string; subtype: string | null }>();
     const sysByName: Record<string, number> = { CASH: cashId, SALES: salesId, 'COST OF GOODS SOLD': cogsId };
@@ -195,21 +227,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     };
 
     // --- 3. group rows into vouchers
-    const groups: Group[] = [];
-    let cur: Group | null = null;
-    for (const r of rows) {
-      const opening = norm(r.item) === 'OPENING' || /^OPENING BALANCE/.test(norm(r.description));
-      const k = opening ? 'OPENING' : norm(r.description);
-      let join = false;
-      if (cur) {
-        if (opening || cur.key === 'OPENING') join = opening && cur.key === 'OPENING';
-        else if (cur.dr === 0 || cur.cr === 0) join = Math.abs(daysBetween(cur.rows[0].date!, r.date!)) <= 3; // one-sided so far: wait for the partner row
-        else if (Math.abs(cur.dr - cur.cr) < 0.01) join = false; // balanced: voucher complete
-        else join = cur.key === k || norm(cur.rows[cur.rows.length - 1].description) === k; // both sides but off (typo): keep only same-description rows
-      }
-      if (cur && join) { cur.rows.push(r); cur.dr += r.debit; cur.cr += r.credit; }
-      else { cur = { key: k, rows: [r], dr: r.debit, cr: r.credit }; groups.push(cur); }
-    }
+    const groups = groupRows(rows);
 
     // --- 4. resolve lines + voucher-level classification
     interface V { date: string; desc: string; lines: Line[]; opening: boolean; rowNo: number; farmKeys: Set<string> }
@@ -277,6 +295,27 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
 
     // --- 5. infer batches per farm from chick placements, then assign every line by date
     //     (the sheet is not in date order and COGS is posted in instalments, so rows can't be walked sequentially)
+    /** Append mode: the farm's batches already in the database, with the totals needed to decide open/closed. */
+    const existingBatches = async (farm: number): Promise<MemBatch[]> => {
+      const out: MemBatch[] = [];
+      for (const b of await all<{ id: number; batch_no: number; placement_date: string | null; placed_qty: number | null; status: string; closed_date: string | null; notes: string | null }>('SELECT id,batch_no,placement_date,placed_qty,status,closed_date,notes FROM batches WHERE farm_id=? ORDER BY batch_no', farm)) {
+        const carry = (b.notes ?? '').startsWith('Cost brought forward');
+        const agg = (await get<{ cost: number; integ: number; cogs: number; hasCogs: number; last: string | null; lastSale: string | null; closedDate: string | null }>(
+          `SELECT COALESCE(SUM(CASE WHEN e.account_id=? AND COALESCE(e.category,'') NOT IN ('cogs','integration') THEN e.debit-e.credit END),0) cost,
+                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='integration' THEN e.debit-e.credit END),0) integ,
+                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='cogs' THEN e.credit-e.debit END),0) cogs,
+                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN 1 ELSE 0 END) hasCogs,
+                  MAX(v.date) last,
+                  MAX(CASE WHEN e.account_id=? THEN v.date END) lastSale,
+                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN v.date END) closedDate
+           FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=?`, wip, wip, wip, wip, salesId, wip, b.id))!;
+        const saleDates = (await all<{ d: string }>('SELECT DISTINCT v.date d FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=? AND e.account_id=?', b.id, salesId)).map((r) => r.d);
+        out.push({ farm, no: b.batch_no, placement: carry ? null : b.placement_date, firstDate: b.placement_date ?? '', lastDate: agg.last ?? b.placement_date ?? '', chicksDate: carry ? null : b.placement_date, chicksQty: b.placed_qty ?? 0,
+          closed: b.status === 'closed', wasClosed: b.status === 'closed', closedDate: b.closed_date ?? agg.closedDate, hasCogs: !!agg.hasCogs, carry, saleDates, cogs: agg.cogs, cost: agg.cost, integ: agg.integ, lastSale: agg.lastSale, realId: b.id });
+      }
+      return out;
+    };
+
     const LEAD = 10; // feed/medicine can be delivered a few days before the chicks arrive
     const vcats = new Map<V, Map<Line, string>>();
     interface FL { l: Line; v: V; kind: 'sale' | 'wip' | 'cogs' | 'other'; cat: string | null; date: string }
@@ -304,12 +343,38 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
       }
       const mk = (placement: string | null, qty: number, carry: boolean): MemBatch => ({ farm, no: 0, placement, firstDate: fls[0].date, lastDate: fls[0].date, chicksDate: placement, chicksQty: qty, closed: false, closedDate: null, hasCogs: false, carry, saleDates: [], cogs: 0, cost: 0, integ: 0, lastSale: null });
       const mem: MemBatch[] = [];
-      const needCarry = !clusters.length || fls.some((x) => x.date < addDays(clusters[0].date, -LEAD) || x.cat === 'opening');
-      const carry = needCarry ? mk(null, 0, true) : null;
-      if (carry) mem.push(carry);
-      const placements = clusters.map((c) => mk(c.date, c.qty, false));
-      mem.push(...placements);
-      mem.forEach((b, i) => { b.no = i + 1; batches.push(b); });
+      let carry: MemBatch | null = null;
+      let placements: MemBatch[] = [];
+      const known = opts.append ? await existingBatches(farm) : [];
+      if (known.length) {
+        // Append mode: continue the farm's existing batches; only a chick placement far from every known one starts a new batch.
+        carry = known.find((b) => b.carry) ?? null;
+        placements = known.filter((b) => !b.carry);
+        // Costs were booked before this farm's first chick placement was recorded: they belong to that first batch, not to a "brought forward" one.
+        if (carry && !placements.length && clusters.length && carry.saleDates.length === 0 && !carry.hasCogs && daysBetween(carry.lastDate, clusters[0].date) <= LEAD) {
+          const first = clusters.shift()!;
+          carry.carry = false; carry.promoted = true; carry.placement = first.date; carry.chicksDate = first.date; carry.chicksQty = first.qty;
+          placements = [carry]; carry = null;
+        }
+        for (const c of clusters) {
+          const hit = placements.find((b) => Math.abs(daysBetween(b.placement!, c.date)) <= 12);
+          if (hit) hit.touchedChicks = true;
+          else { const nb = mk(c.date, c.qty, false); nb.isNew = true; placements.push(nb); }
+        }
+        placements.sort((x, y) => (x.placement! < y.placement! ? -1 : 1));
+        let n = Math.max(0, ...known.map((b) => b.no));
+        for (const b of placements) if (b.isNew) b.no = ++n;
+        mem.push(...known, ...placements.filter((b) => b.isNew));
+      } else {
+        const needCarry = !clusters.length || fls.some((x) => x.date < addDays(clusters[0].date, -LEAD) || x.cat === 'opening');
+        carry = needCarry ? mk(null, 0, true) : null;
+        if (carry) mem.push(carry);
+        placements = clusters.map((c) => mk(c.date, c.qty, false));
+        mem.push(...placements);
+        mem.forEach((b, i) => { b.no = i + 1; });
+      }
+      for (const b of mem) batches.push(b);
+      if (!carry && !placements.length) continue;
       const pick = (date: string, lead: number): MemBatch => {
         let chosen: MemBatch = carry ?? placements[0];
         for (const b of placements) if (addDays(b.placement!, -lead) <= date) chosen = b;
@@ -347,6 +412,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     // --- 6. persist batches (older batches are closed; the farm's latest is running unless its cost has been cleared to COGS)
     const ref = today();
     const lastPerFarm = new Map<number, MemBatch>();
+    const recount: number[] = []; // existing batches that received chick entries: placed quantity is re-added after posting
     for (const b of batches) lastPerFarm.set(b.farm, b);
     for (const b of batches) {
       const placement = b.placement ?? b.firstDate;
@@ -354,6 +420,13 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
       const cleared = b.saleDates.length > 0 && b.cogs >= b.cost * 0.9;
       const stale = daysBetween(b.lastDate, ref) > 60;
       const closed = !isLatest || cleared || stale;
+      if (b.realId && !b.isNew) {
+        // Append mode, batch already exists: it may close (a newer batch started, or its cost was cleared) but a closed batch is never re-opened.
+        if (b.promoted) await run(`UPDATE batches SET placement_date=?, notes=NULL, partial=0, status=?, closed_date=? WHERE id=?`, b.placement, closed ? 'closed' : 'running', closed ? (b.closedDate ?? b.lastSale ?? b.lastDate) : null, b.realId);
+        else if (!b.wasClosed && closed) await run(`UPDATE batches SET status='closed', closed_date=? WHERE id=?`, b.closedDate ?? b.lastSale ?? b.lastDate, b.realId);
+        if (b.touchedChicks || b.promoted) recount.push(b.realId);
+        continue;
+      }
       b.closed = closed;
       const closedDate = closed ? (b.closedDate ?? b.lastSale ?? b.lastDate) : null;
       const note = b.carry ? 'Cost brought forward from before this system (opening balances) — placement date unknown' : closed && !cleared && !isLatest && !b.hasCogs ? 'Closed automatically on import (no cost clearing entry found)' : null;
@@ -424,6 +497,10 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
         source: 'import', userId: opts.userId, meta: { excelRow: v.rowNo }, entries,
       });
       voucherCount++; entryCount += entries.length;
+    }
+
+    for (const id of recount) {
+      await run(`UPDATE batches SET placed_qty=(SELECT ROUND(SUM(qty)) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0) WHERE id=? AND (SELECT SUM(qty) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0)>0`, id, id, id);
     }
 
     // --- 8. link farms to their farmer account

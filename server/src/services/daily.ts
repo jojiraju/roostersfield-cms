@@ -1,145 +1,114 @@
-import { all, get, getSetting, run } from '../db.ts';
-import { badRequest, notFound } from '../errors.ts';
-import { round2, today } from '../util.ts';
-import { listBatches } from './batches.ts';
-import { feedChart, flockIssues, flockMetrics } from './flockMetrics.ts';
-import type { FlockDay } from './flockMetrics.ts';
+import { all, get, getSetting, run, tx } from '../db.ts';
+import { notFound } from '../errors.ts';
+import { addDays, daysBetween, round2, today } from '../util.ts';
 
-interface FlockRow { id: number; name: string; placement_date: string; placed_qty: number | null; gross_qty: number; status: 'running' | 'closed'; source: string; notes: string | null }
-type DayRow = FlockDay & { flock_id: number; source: string };
-type BatchList = Awaited<ReturnType<typeof listBatches>>;
+export interface DailyInput { mortality?: number | null; saleQty?: number | null; saleWeight?: number | null; feedIn?: number | null; feedUsed?: number | null; note?: string | null }
+interface Log { batch_id: number; date: string; mortality: number | null; sale_qty: number | null; sale_weight: number | null; feed_in: number | null; feed_used: number | null; note: string | null }
+interface Std { day: number; feed_g: number | null; weight_g: number | null; fcr: number | null }
 
-const key = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+const n0 = (v: number | null | undefined) => v ?? 0;
 
-/** Workbook tab name → farm name in the accounts, where the two are spelt differently. */
-const FARM_ALIASES: Record<string, string> = {
-  ANANDFARM: 'ANANAD FARM', JITHUKOTTAMALA: 'JITHU KOTAMALA FARM', LALUKOTTMALA2: 'LALU KOTTAMALA FARM 2', LALUKOTTAMALA2: 'LALU KOTTAMALA FARM 2',
-  LALUKOTTAMALA3: 'LALU KOTTAMALA FARM 3', MATHAIKAIPPINI: 'MATHAI FARM', MADHUCHUNGATHARA: 'MADHU FARM', USMANCHUNGATHARA: 'USMAN FARM',
-  RAFEEKPALEMAD: 'RAFEEK FARM', NAVAJITH: 'NAVJITH FARM',
-};
-export function farmNameFor(flockName: string, farms: string[]): string | null {
-  const k = key(flockName);
-  const byKey = (x: string) => farms.find((f) => key(f) === x) ?? null;
-  return byKey(k) ?? byKey(`${k}FARM`) ?? (FARM_ALIASES[k] ? byKey(key(FARM_ALIASES[k])) : null);
+export const stdChart = async (): Promise<Std[]> => all<Std>('SELECT day,feed_g,weight_g,fcr FROM std_chart ORDER BY day');
+
+/** Walks a batch's logs in date order and works out the running figures a farm manager looks at. */
+/** Feed bag weight and the % of free birds the hatchery adds on top of the chicks billed — both come from Settings. */
+async function basis() {
+  return { bagKg: Number(await getSetting('feed_bag_kg', '50')) || 50, extra: Number(await getSetting('chick_extra_pct', '2')) || 0 };
 }
+const received = (placed: number | null, extra: number) => (placed ? Math.round(placed * (1 + extra / 100)) : 0);
 
-/** The accounts' batch for this flock: same farm, placed within ten days. */
-function ledgerBatch(f: FlockRow, batches: BatchList, farms: string[]) {
-  const farm = farmNameFor(f.name, farms);
-  if (!farm) return { farm: null, batch: null };
-  const t = Date.parse(f.placement_date);
-  let best: BatchList[number] | null = null, gap = 11;
-  for (const b of batches) {
-    if (b.farm_name !== farm || !b.placement_date) continue;
-    const d = Math.abs(Date.parse(b.placement_date) - t) / 86400000;
-    if (d < gap) { gap = d; best = b; }
+function walk(placed: number, placement: string, logs: Log[], std: Map<number, Std>, upTo: string, BAG_KG: number) {
+  const byDate = new Map(logs.map((l) => [l.date, l]));
+  const rows: any[] = [];
+  let cumMort = 0, cumSold = 0, cumIn = 0, cumUsed = 0, cumReq = 0, soldKg = 0;
+  for (let d = placement; d <= upTo; d = addDays(d, 1)) {
+    const l = byDate.get(d);
+    const day = daysBetween(placement, d);
+    cumMort += n0(l?.mortality); cumSold += n0(l?.sale_qty); soldKg += n0(l?.sale_weight);
+    cumIn += n0(l?.feed_in); cumUsed += n0(l?.feed_used);
+    const alive = placed ? Math.max(0, placed - cumMort - cumSold) : null;
+    const s = std.get(day);
+    const reqKg = s?.feed_g != null && alive !== null ? (s.feed_g * alive) / 1000 : null;
+    if (reqKg !== null) cumReq += reqKg / BAG_KG;
+    rows.push({
+      date: d, day, hasLog: !!l,
+      mortality: l?.mortality ?? null, saleQty: l?.sale_qty ?? null, saleWeight: l?.sale_weight ?? null, feedIn: l?.feed_in ?? null, feedUsed: l?.feed_used ?? null, note: l?.note ?? null,
+      cumMortality: cumMort, mortalityPct: placed ? round2((cumMort / placed) * 100) : null, cumSold, alive,
+      stock: round2(cumIn - cumUsed), cumFeedUsed: round2(cumUsed),
+      stdFeedBags: reqKg !== null ? round2(reqKg / BAG_KG) : null, cumStdFeedBags: reqKg !== null ? round2(cumReq) : null,
+      feedDiff: reqKg !== null && l?.feed_used != null ? round2(l.feed_used - reqKg / BAG_KG) : null,
+      stdWeight: s?.weight_g ?? null, avgSoldWeight: l?.sale_qty && l?.sale_weight ? round2(l.sale_weight / l.sale_qty) : null,
+    });
   }
-  return { farm, batch: best };
+  return { rows, cumMort, cumSold, cumIn, cumUsed, soldKg };
 }
 
-type LedgerTotals = Map<number, { birds: number; kg: number; bags: number }>;
-
-/**
- * Birds, kg and feed bags per batch in the accounts, up to the cutoff.
- * Bills entered in the app after the last import are left out, so both sides of the comparison cover the same days.
- */
-async function ledgerTotals(through: string | null): Promise<LedgerTotals> {
-  const upTo = through ? 'AND e.date <= ?' : '';
-  const args = through ? [through] : [];
-  const out: LedgerTotals = new Map();
-  const at = (id: number) => { let t = out.get(id); if (!t) { t = { birds: 0, kg: 0, bags: 0 }; out.set(id, t); } return t; };
-  const sales = await all<{ batch_id: number; birds: number; kg: number }>(
-    `SELECT e.batch_id,
-            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) birds,
-            SUM(CASE WHEN e.credit>0 THEN COALESCE(e.weight,0) ELSE -COALESCE(e.weight,0) END) kg
-       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='sales'
-      WHERE e.batch_id IS NOT NULL ${upTo} GROUP BY e.batch_id`, ...args);
-  for (const r of sales) { const t = at(r.batch_id); t.birds = r.birds; t.kg = round2(r.kg); }
-  const feed = await all<{ batch_id: number; bags: number }>(
-    `SELECT e.batch_id, SUM(CASE WHEN e.debit>0 THEN COALESCE(e.qty,0) ELSE -COALESCE(e.qty,0) END) bags
-       FROM entries e JOIN accounts a ON a.id=e.account_id AND a.sys_key='wip'
-      WHERE e.batch_id IS NOT NULL AND e.category IN ('feed','feed_return') ${upTo} GROUP BY e.batch_id`, ...args);
-  for (const r of feed) at(r.batch_id).bags = round2(r.bags);
-  return out;
-}
-
-/** Compares the daily sheet with the accounts, counting only the days the accounts have reached on both sides. */
-function ledgerCheck(f: FlockRow, days: FlockDay[], batches: BatchList, totals: LedgerTotals, farms: string[], through: string | null) {
-  const { farm, batch } = ledgerBatch(f, batches, farms);
-  const upTo = days.filter((d) => !through || d.date <= through);
-  const daily = { birds: upTo.reduce((s, d) => s + d.sale_qty, 0), kg: upTo.reduce((s, d) => s + d.sale_kg, 0), bags: upTo.reduce((s, d) => s + d.feed_in, 0) };
-  if (!batch) {
-    // Placed after the accounts stop: there can't be a batch yet, so this isn't a difference.
-    const tooNew = !!farm && !!through && f.placement_date > through;
-    return { farm, batchId: null, batchNo: null, batchStatus: null, placed: null, daily, ledger: null, differs: tooNew ? [] : [farm ? 'No batch in the accounts for this placement' : 'No farm in the accounts with this name'] };
+export async function batchDaily(batchId: number) {
+  const b = await get<any>(`SELECT b.id,b.batch_no,b.placement_date,b.placed_qty,b.status,b.closed_date,f.id farm_id,f.name farm_name FROM batches b JOIN farms f ON f.id=b.farm_id WHERE b.id=?`, batchId);
+  if (!b) throw notFound('Batch not found');
+  const logs = await all<Log>('SELECT * FROM daily_logs WHERE batch_id=? ORDER BY date', batchId);
+  const std = new Map((await stdChart()).map((s) => [s.day, s]));
+  const placement: string | null = b.placement_date ?? logs[0]?.date ?? null;
+  let rows: any[] = [], totals: any = null;
+  if (placement) {
+    const lastLog = logs.length ? logs[logs.length - 1].date : placement;
+    const end = b.status === 'closed' ? (b.closed_date && b.closed_date > lastLog ? b.closed_date : lastLog) : (today() > lastLog ? today() : lastLog);
+    const { bagKg, extra } = await basis();
+    const base = received(b.placed_qty, extra);
+    const w = walk(base, placement, logs, std, end < placement ? placement : end, bagKg);
+    rows = w.rows;
+    totals = { mortality: w.cumMort, mortalityPct: base ? round2((w.cumMort / base) * 100) : null, received: base || null, sold: w.cumSold, soldKg: round2(w.soldKg), feedIn: round2(w.cumIn), feedUsed: round2(w.cumUsed), stock: round2(w.cumIn - w.cumUsed), alive: base ? Math.max(0, base - w.cumMort - w.cumSold) : null };
   }
-  const ledger = totals.get(batch.id) ?? { birds: 0, kg: 0, bags: 0 };
-  const differs: string[] = [];
-  if (f.placed_qty !== null && batch.placed_qty !== null && Math.abs(f.placed_qty - batch.placed_qty) >= 1) differs.push('placed');
-  if (batch.placed_qty === null) differs.push('placed');
-  if (Math.abs(daily.birds - ledger.birds) >= 1) differs.push('birds sold');
-  if (Math.abs(daily.kg - ledger.kg) >= 1) differs.push('kg sold');
-  if (Math.abs(daily.bags - ledger.bags) >= 0.5) differs.push('feed bags');
-  return { farm, batchId: batch.id, batchNo: batch.batch_no, batchStatus: batch.status, placed: batch.placed_qty, daily, ledger, differs };
+  return { batch: b, rows, totals, hasStd: std.size > 0 };
 }
 
-const bagSize = async () => Number(await getSetting('feed_bag_kg', '50')) || 50;
-/** The last date the imported accounts run to. Both sides of the check stop here until the next accounts import moves it on. */
-const ledgerThrough = async () => (await get<{ d: string | null }>(`SELECT MAX(date) d FROM vouchers WHERE source='import'`))?.d ?? null;
-const farmNames = async () => (await all<{ name: string }>('SELECT name FROM farms')).map((f) => f.name);
-const flockDays = (id: number) => all<DayRow>('SELECT * FROM flock_days WHERE flock_id=? ORDER BY date', id);
-
-export async function dailyReport(requestedDate?: string) {
-  const now = today();
-  const flocks = await all<FlockRow>('SELECT * FROM flocks ORDER BY placement_date, name');
-  const rows = await all<DayRow>('SELECT * FROM flock_days ORDER BY date');
-  const byFlock = new Map<number, DayRow[]>();
-  for (const r of rows) { const l = byFlock.get(r.flock_id); if (l) l.push(r); else byFlock.set(r.flock_id, [r]); }
-  // Until today's figures are in, show the last day anything was entered on, not a page of zeros.
-  const running = new Set(flocks.filter((f) => f.status === 'running').map((f) => f.id));
-  const latest = rows.reduce<string | null>((m, r) => (running.has(r.flock_id) && r.date <= now && (!m || r.date > m) ? r.date : m), null);
-  const asOf = requestedDate ?? latest ?? now;
-  const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
-  const totals = await ledgerTotals(through);
-  return {
-    asOf, today: now, ledgerThrough: through, bagKg,
-    flocks: flocks.map((f) => {
-      const days = byFlock.get(f.id) ?? [];
-      return { ...f, ...flockMetrics(f, days, asOf, bagKg), enteredOnDay: days.some((d) => d.date === asOf), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, totals, farms, through) };
-    }),
-  };
+/** One line per running batch (plus any batch that has a report on that day) as of a date — the "daily report" screen. */
+export async function dailyOverview(date: string) {
+  const batches = await all<any>(
+    `SELECT b.id,b.batch_no,b.placement_date,b.placed_qty,b.status,f.name farm_name,f.farmer_name
+       FROM batches b JOIN farms f ON f.id=b.farm_id
+      WHERE b.placement_date IS NOT NULL AND b.placement_date<=? AND (b.status='running' OR EXISTS (SELECT 1 FROM daily_logs d WHERE d.batch_id=b.id AND d.date=?))
+        AND COALESCE(b.partial,0)=0
+      ORDER BY f.name, b.batch_no`, date, date);
+  if (!batches.length) return { date, rows: [] };
+  const ids = batches.map((b) => b.id);
+  const logs = await all<Log>(`SELECT * FROM daily_logs WHERE batch_id IN (${ids.map(() => '?').join(',')}) AND date<=? ORDER BY date`, ...ids, date);
+  const std = new Map((await stdChart()).map((s) => [s.day, s]));
+  const { bagKg, extra } = await basis();
+  const per = new Map<number, Log[]>();
+  for (const l of logs) { if (!per.has(l.batch_id)) per.set(l.batch_id, []); per.get(l.batch_id)!.push(l); }
+  const rows = batches.map((b) => {
+    const mine = per.get(b.id) ?? [];
+    const w = walk(received(b.placed_qty, extra), b.placement_date, mine, std, date, bagKg);
+    const t = w.rows[w.rows.length - 1];
+    const lastReport = mine.length ? mine[mine.length - 1].date : null;
+    return {
+      batchId: b.id, farm: b.farm_name, farmer: b.farmer_name, batchNo: b.batch_no, placementDate: b.placement_date, placed: b.placed_qty, received: received(b.placed_qty, extra) || null, status: b.status,
+      age: t.day, alive: t.alive, cumMortality: t.cumMortality, mortalityPct: t.mortalityPct, stock: t.stock, cumFeedUsed: t.cumFeedUsed, cumStdFeedBags: t.cumStdFeedBags,
+      feedGap: t.cumStdFeedBags !== null ? round2(t.cumFeedUsed - t.cumStdFeedBags) : null, stdWeight: t.stdWeight,
+      today: t.hasLog ? { mortality: t.mortality, saleQty: t.saleQty, saleWeight: t.saleWeight, feedIn: t.feedIn, feedUsed: t.feedUsed, note: t.note } : null,
+      lastReport, daysSince: lastReport ? daysBetween(lastReport, date) : null,
+    };
+  });
+  return { date, rows };
 }
 
-export async function flockDetail(id: number) {
-  const f = await get<FlockRow>('SELECT * FROM flocks WHERE id=?', id);
-  if (!f) throw notFound('Flock not found');
-  const now = today();
-  const days = await flockDays(id);
-  const [bagKg, through, batches, farms] = await Promise.all([bagSize(), ledgerThrough(), listBatches(), farmNames()]);
-  const chart = feedChart(f.placement_date, f.gross_qty, days, bagKg);
-  return { ...f, ...flockMetrics(f, days, now, bagKg), issues: flockIssues(f, days, now), check: ledgerCheck(f, days, batches, await ledgerTotals(through), farms, through), days, chart };
+const clean = (v: number | null | undefined) => (v === undefined || v === null || Number.isNaN(v) ? null : v);
+export async function saveDaily(batchId: number, date: string, d: DailyInput, userId: number | null, source = 'app') {
+  const b = await get('SELECT 1 FROM batches WHERE id=?', batchId);
+  if (!b) throw notFound('Batch not found');
+  const v = { m: clean(d.mortality), sq: clean(d.saleQty), sw: clean(d.saleWeight), fi: clean(d.feedIn), fu: clean(d.feedUsed), note: d.note?.trim() || null };
+  if (v.m === null && v.sq === null && v.sw === null && v.fi === null && v.fu === null && !v.note) {
+    await run('DELETE FROM daily_logs WHERE batch_id=? AND date=?', batchId, date);
+    return;
+  }
+  await run(
+    `INSERT INTO daily_logs(batch_id,date,mortality,sale_qty,sale_weight,feed_in,feed_used,note,source,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'))
+     ON CONFLICT(batch_id,date) DO UPDATE SET mortality=excluded.mortality, sale_qty=excluded.sale_qty, sale_weight=excluded.sale_weight, feed_in=excluded.feed_in, feed_used=excluded.feed_used,
+       note=excluded.note, source=excluded.source, updated_by=excluded.updated_by, updated_at=datetime('now')`,
+    batchId, date, v.m, v.sq, v.sw, v.fi, v.fu, v.note, source, userId);
 }
 
-export async function createFlock(d: { name: string; placementDate: string; placedQty: number; grossQty: number; notes?: string | null }) {
-  if (await get('SELECT 1 FROM flocks WHERE name=? AND placement_date=?', d.name, d.placementDate)) throw badRequest(`${d.name} already has a flock placed on that date`);
-  return { id: (await run(`INSERT INTO flocks(name,placement_date,placed_qty,gross_qty,source,notes) VALUES(?,?,?,?,'app',?)`, d.name, d.placementDate, d.placedQty, d.grossQty, d.notes ?? null)).id };
-}
-
-export async function updateFlock(id: number, d: { status?: 'running' | 'closed'; placementDate?: string; placedQty?: number; grossQty?: number; notes?: string | null }) {
-  if (!await get('SELECT 1 FROM flocks WHERE id=?', id)) throw notFound('Flock not found');
-  await run('UPDATE flocks SET status=COALESCE(?,status), placement_date=COALESCE(?,placement_date), placed_qty=COALESCE(?,placed_qty), gross_qty=COALESCE(?,gross_qty), notes=COALESCE(?,notes) WHERE id=?',
-    d.status, d.placementDate, d.placedQty, d.grossQty, d.notes, id);
-}
-
-export async function saveDay(id: number, date: string, d: { mortality: number; saleQty: number; saleKg: number; feedIn: number; feedUsed: number; avgWeightG: number | null }) {
-  const f = await get<FlockRow>('SELECT * FROM flocks WHERE id=?', id);
-  if (!f) throw notFound('Flock not found');
-  // Clearing comes first so a wrongly dated entry from the workbook can always be removed.
-  const empty = !d.mortality && !d.saleQty && !d.saleKg && !d.feedIn && !d.feedUsed && !d.avgWeightG;
-  if (empty) { await run('DELETE FROM flock_days WHERE flock_id=? AND date=?', id, date); return; }
-  if (date < f.placement_date) throw badRequest('That date is before this flock was placed');
-  if (date > today()) throw badRequest('That date is in the future');
-  await run(`INSERT INTO flock_days(flock_id,date,mortality,sale_qty,sale_kg,feed_in,feed_used,avg_weight_g,source) VALUES(?,?,?,?,?,?,?,?,'app')
-             ON CONFLICT(flock_id,date) DO UPDATE SET mortality=excluded.mortality, sale_qty=excluded.sale_qty, sale_kg=excluded.sale_kg, feed_in=excluded.feed_in, feed_used=excluded.feed_used, avg_weight_g=excluded.avg_weight_g, source='app'`,
-    id, date, d.mortality, d.saleQty, d.saleKg, d.feedIn, d.feedUsed, d.avgWeightG);
+export async function saveDailyBulk(date: string, items: Array<DailyInput & { batchId: number }>, userId: number | null) {
+  await tx(async () => { for (const it of items) await saveDaily(it.batchId, date, it, userId); });
 }
