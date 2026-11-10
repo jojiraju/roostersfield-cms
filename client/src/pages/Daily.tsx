@@ -70,11 +70,30 @@ export default function Daily() {
           </div>
 
           <Card flush className="mt-16">
-            <CardHead icon="list" title={`Farm reports · ${fmtDate(date)}`} right={<Button variant="primary" icon="check" loading={busy} disabled={!dirty.size} onClick={save}>{dirty.size ? `Save ${dirty.size} change${dirty.size === 1 ? '' : 's'}` : 'Saved'}</Button>} />
+            <div className="daily-bar">
+              <div className="daily-bar-title">
+                <span className="daily-bar-ico"><Icon name="list" size={18} /></span>
+                <div>
+                  <h2>Farm reports</h2>
+                  <div className="small muted">{fmtDate(date)} · {stats.done} of {stats.total} farms reported</div>
+                </div>
+              </div>
+              <div className="daily-bar-actions">
+                {dirty.size > 0
+                  ? <Badge tone="orange" dot>{dirty.size} unsaved</Badge>
+                  : <Badge tone="green"><Icon name="check" size={13} /> All saved</Badge>}
+                <Button variant="primary" icon="check" loading={busy} disabled={!dirty.size} onClick={save}>{dirty.size ? `Save ${dirty.size} change${dirty.size === 1 ? '' : 's'}` : 'Save'}</Button>
+              </div>
+            </div>
             {rows.length === 0 ? <Empty title="No running flocks on this date" icon="egg" /> : (
               <div className="table-wrap">
                 <table className="table daily-table">
                   <thead>
+                    <tr className="group-row">
+                      <th colSpan={2} />
+                      <th colSpan={5} className="group in-group">Today's entry</th>
+                      <th colSpan={3} className="group">Running totals</th>
+                    </tr>
                     <tr>
                       <th>Farm / batch</th><th className="num">Age</th>
                       <th className="num in">Mortality</th><th className="num in">Feed in</th><th className="num in">Feed used</th><th className="num in">Sold birds</th><th className="num in">Sold kg</th>
@@ -88,6 +107,7 @@ export default function Daily() {
                       return (
                         <tr key={r.batchId} className={dirty.has(r.batchId) ? 'row-dirty' : ''}>
                           <td>
+                            <span className={`state-dot ${dirty.has(r.batchId) ? 'edit' : reported ? 'done' : ''}`} title={dirty.has(r.batchId) ? 'Unsaved changes' : reported ? 'Reported' : 'Not reported yet'} />
                             <a className="strong link" onClick={() => navigate(`/daily/${r.batchId}`)}>{r.farm}</a> <span className="muted small">#{r.batchNo}</span>
                             <span className="sub">{num(r.received ?? 0)} birds · {fmtDate(r.placementDate)}{!reported && r.daysSince !== null && r.daysSince > 0 ? ` · last report ${r.daysSince}d ago` : ''}</span>
                           </td>
@@ -95,7 +115,7 @@ export default function Daily() {
                           {FIELDS.map((f) => <td key={f} className="num in"><NumInput sm value={d[f]} onChange={(v) => edit(r.batchId, f, v)} decimals={f !== 'mortality' && f !== 'saleQty'} /></td>)}
                           <td className="num"><span className={(r.mortalityPct ?? 0) > 4 ? 'neg strong' : ''}>{r.mortalityPct !== null ? `${fixed(r.mortalityPct, 2)}%` : '—'}</span><span className="sub">{num(r.cumMortality)} birds</span></td>
                           <td className="num">{fixed(r.stock, 1)}<span className="sub">{fixed(r.cumFeedUsed, 1)} used</span></td>
-                          <td className="num">{r.feedGap === null ? '—' : <span className={r.feedGap > 2 ? 'neg strong' : r.feedGap < -2 ? 'muted' : 'pos'}>{r.feedGap > 0 ? '+' : ''}{fixed(r.feedGap, 1)}</span>}<span className="sub">bags</span></td>
+                          <td className="num">{r.feedGap === null ? '—' : <span className={`gap-pill ${r.feedGap > 2 ? 'high' : r.feedGap < -2 ? 'low' : 'ok'}`}>{r.feedGap > 0 ? '+' : ''}{fixed(r.feedGap, 1)} bags</span>}<span className="sub">{r.feedGap === null ? '' : r.feedGap > 2 ? 'over standard' : r.feedGap < -2 ? 'under standard' : 'on standard'}</span></td>
                         </tr>
                       );
                     })}
