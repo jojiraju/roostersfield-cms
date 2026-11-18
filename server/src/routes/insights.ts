@@ -74,7 +74,7 @@ export function insightRoutes(r: Router) {
     const replace = query.get('replace') === '1';
     const hasData = ((await get<{ n: number }>(`SELECT COUNT(*) n FROM vouchers`))?.n ?? 0) > 0;
     // Update: add what is new in the workbook, apply corrections, keep everything else.
-    if (hasData && !replace && query.get('mode') === 'update') return { mode: 'update', ...(await syncWorkbook(buf, { userId: user!.sub })) };
+    if (hasData && !replace && query.get('mode') === 'update') return { mode: 'update', ...(await syncWorkbook(buf, { userId: user!.sub, prune: query.get('prune') === '1' })) };
     if (hasData && !replace) throw badRequest('There is already data in the system. Choose “Update” to add the new entries, or “Replace everything” to start over (a backup is taken first).');
     return await importWorkbook(buf, { replace, userId: user!.sub });
   }, { admin: true, raw: true });

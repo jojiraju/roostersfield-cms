@@ -6579,49 +6579,84 @@ async function syncJournal(allRows, tb, opts) {
     if (detailsCorrected.length < 100) detailsCorrected.push(`${w.rows[0].date} \xB7 ${w.rows[0].description.trim()}`);
   }
   const notInWorkbook = [...db.keys()].filter((g) => !wb.has(g));
+  const remove = /* @__PURE__ */ new Set();
+  if (opts.prune) for (const g of notInWorkbook) for (const v of db.get(g).vouchers) remove.add(v);
   const deltaRows = [];
   for (const grp of groupRows(rows)) {
     const date2 = grp.rows[0].date;
     for (const r of grp.rows) if (changedKeys.has(`${date2}|${norm2(r.description.slice(0, 200))}`)) deltaRows.push(r);
   }
-  if (!deltaRows.length) {
+  const details = { added: detailsAdded, corrected: detailsCorrected, notInWorkbook: notInWorkbook.slice(0, 100) };
+  if (!deltaRows.length && !remove.size) {
     return {
       workbookEntries: wb.size,
       unchanged,
       added: 0,
       corrected: 0,
+      removed: 0,
       keptNotInWorkbook: notInWorkbook.length,
       newBatches: 0,
       importReport: null,
       backup: null,
       warnings,
-      details: { added: [], corrected: [], notInWorkbook: notInWorkbook.slice(0, 100) }
+      details,
+      check: await checkAgainstWorkbook(rows, tb)
     };
   }
   const backup = await backupLocal("before-sync");
   const batchesBefore = (await all("SELECT COUNT(*) n FROM batches"))[0].n;
+  const gone = [...supersede, ...remove];
   const importReport = await deferWrites(async () => {
-    for (const id2 of supersede) await deleteVoucher(id2);
-    return importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true, ignoreVouchers: [...supersede] });
+    for (const id2 of gone) await deleteVoucher(id2);
+    return deltaRows.length ? importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true, ignoreVouchers: gone }) : null;
   });
-  const st = await get("SELECT MIN(date) a, MAX(date) b FROM vouchers");
-  importReport.firstDate = st.a;
-  importReport.lastDate = st.b;
-  importReport.farms = (await get("SELECT COUNT(*) n FROM farms")).n;
-  importReport.runningBatches = (await get(`SELECT COUNT(*) n FROM batches WHERE status='running'`)).n;
+  if (importReport) {
+    const st = await get("SELECT MIN(date) a, MAX(date) b FROM vouchers");
+    importReport.firstDate = st.a;
+    importReport.lastDate = st.b;
+    importReport.farms = (await get("SELECT COUNT(*) n FROM farms")).n;
+    importReport.runningBatches = (await get(`SELECT COUNT(*) n FROM batches WHERE status='running'`)).n;
+  }
   const batchesAfter = (await all("SELECT COUNT(*) n FROM batches"))[0].n;
   return {
     workbookEntries: wb.size,
     unchanged,
     added,
     corrected,
-    keptNotInWorkbook: notInWorkbook.length,
+    removed: opts.prune ? notInWorkbook.length : 0,
+    keptNotInWorkbook: opts.prune ? 0 : notInWorkbook.length,
     newBatches: batchesAfter - batchesBefore,
     importReport,
     backup,
-    warnings: [...warnings, ...importReport.warnings].slice(0, 60),
-    details: { added: detailsAdded, corrected: detailsCorrected, notInWorkbook: notInWorkbook.slice(0, 100) }
+    warnings: [...warnings, ...importReport?.warnings ?? []].slice(0, 60),
+    details,
+    check: await checkAgainstWorkbook(rows, tb)
   };
+}
+async function checkAgainstWorkbook(rows, tb) {
+  const { isFarmAccount, resolveFarmKey, farmNames } = farmResolver(rows, tb);
+  const xl = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const k = isFarmAccount(r.account) ? `${farmNames.get(resolveFarmKey(r.account))}` : norm2(r.account);
+    xl.set(k, (xl.get(k) ?? 0) + r.debit - r.credit);
+  }
+  const suspense = await sysAccountId("suspense");
+  const app = /* @__PURE__ */ new Map();
+  for (const r of await all(
+    `SELECT a.name, a.sys_key, f.name farm, SUM(e.debit-e.credit) bal
+       FROM entries e JOIN vouchers v ON v.id=e.voucher_id JOIN accounts a ON a.id=e.account_id LEFT JOIN farms f ON f.id=e.farm_id
+      WHERE v.source='import' AND NOT (e.account_id=? AND COALESCE(e.narration,'') LIKE 'Import difference%')
+      GROUP BY a.id, CASE WHEN a.sys_key='wip' THEN e.farm_id END`,
+    suspense
+  )) {
+    const k = r.sys_key === "wip" ? `${r.farm ?? "FARM (none)"}` : norm2(r.name);
+    app.set(k, (app.get(k) ?? 0) + r.bal);
+  }
+  const keys = /* @__PURE__ */ new Set([...xl.keys(), ...app.keys()]);
+  const r2 = (n2) => Math.round(n2 * 100) / 100;
+  const mismatches = [...keys].map((k) => ({ account: k, workbook: r2(xl.get(k) ?? 0), software: r2(app.get(k) ?? 0) })).filter((d2) => Math.abs(d2.workbook - d2.software) >= 1).sort((a, b) => Math.abs(b.workbook - b.software) - Math.abs(a.workbook - a.software));
+  const typedInSoftware = (await get(`SELECT COUNT(*) n FROM vouchers WHERE source<>'import'`)).n;
+  return { accounts: keys.size, mismatches: mismatches.slice(0, 50), typedInSoftware };
 }
 
 // src/importer/excel.ts
@@ -6681,9 +6716,11 @@ async function parseWorkbook(buf) {
   const tbName = wb.SheetNames.find((n2) => n2.trim().toUpperCase() === "TRAIL BALANCE" || n2.trim().toUpperCase() === "TRIAL BALANCE");
   if (tbName) {
     const t = XLSX.utils.sheet_to_json(wb.Sheets[tbName], { header: 1, raw: true, defval: null });
+    const hdr = t.find((r) => r.some((c2) => str(c2).toUpperCase() === "ACCOUNT"));
+    const nc = hdr ? hdr.findIndex((c2) => str(c2).toUpperCase() === "ACCOUNT") : 1;
     for (const r of t) {
-      const name = str(r[1]).toUpperCase().replace(/\s+/g, " ");
-      const cls = str(r[10]);
+      const name = str(r[nc]).toUpperCase().replace(/\s+/g, " ");
+      const cls = str(r[nc + 9]);
       if (name && cls && name !== "ACCOUNT") tb[name] = cls;
     }
   }
@@ -6753,7 +6790,7 @@ function insightRoutes(r) {
     if (buf.length < 1e3) throw badRequest("That file looks empty. Choose the Rooster\u2019s Field Excel workbook (.xlsx).");
     const replace = query.get("replace") === "1";
     const hasData = ((await get(`SELECT COUNT(*) n FROM vouchers`))?.n ?? 0) > 0;
-    if (hasData && !replace && query.get("mode") === "update") return { mode: "update", ...await syncWorkbook(buf, { userId: user.sub }) };
+    if (hasData && !replace && query.get("mode") === "update") return { mode: "update", ...await syncWorkbook(buf, { userId: user.sub, prune: query.get("prune") === "1" }) };
     if (hasData && !replace) throw badRequest("There is already data in the system. Choose \u201CUpdate\u201D to add the new entries, or \u201CReplace everything\u201D to start over (a backup is taken first).");
     return await importWorkbook(buf, { replace, userId: user.sub });
   }, { admin: true, raw: true });

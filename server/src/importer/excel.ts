@@ -52,7 +52,11 @@ export async function parseWorkbook(buf: Buffer): Promise<{ rows: JournalRow[]; 
   const tbName = wb.SheetNames.find((n) => n.trim().toUpperCase() === 'TRAIL BALANCE' || n.trim().toUpperCase() === 'TRIAL BALANCE');
   if (tbName) {
     const t = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[tbName], { header: 1, raw: true, defval: null });
-    for (const r of t) { const name = str(r[1]).toUpperCase().replace(/\s+/g, ' '); const cls = str(r[10]); if (name && cls && name !== 'ACCOUNT') tb[name] = cls; }
+    // The account column moves between versions of the workbook (column B in older copies, column A now): find it from the "ACCOUNT" header.
+    // The statement classification ("CURRENT ASSETS", "EXPENSES" …) sits 9 columns to its right.
+    const hdr = t.find((r) => r.some((c) => str(c).toUpperCase() === 'ACCOUNT'));
+    const nc = hdr ? hdr.findIndex((c) => str(c).toUpperCase() === 'ACCOUNT') : 1;
+    for (const r of t) { const name = str(r[nc]).toUpperCase().replace(/\s+/g, ' '); const cls = str(r[nc + 9]); if (name && cls && name !== 'ACCOUNT') tb[name] = cls; }
   }
   return { rows, tb };
 }
@@ -63,7 +67,7 @@ export async function importWorkbook(buf: Buffer, opts: { replace: boolean; user
   return await importJournal(rows, tb, opts);
 }
 
-export async function syncWorkbook(buf: Buffer, opts: { userId: number | null }): Promise<SyncReport> {
+export async function syncWorkbook(buf: Buffer, opts: { userId: number | null; prune?: boolean }): Promise<SyncReport> {
   const { rows, tb } = await parseWorkbook(buf);
   if (!rows.length) throw badRequest('No journal rows were found in the JOURNALS sheet.');
   return await syncJournal(rows, tb, opts);
