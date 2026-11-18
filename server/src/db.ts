@@ -38,8 +38,49 @@ export const run = async (sql: string, ...params: Param[]) => {
   return { changes: Number(r.rowsAffected), id: Number(r.lastInsertRowid ?? 0) };
 };
 
-/** Runs fn inside a transaction (nested calls become savepoints). Rolls back on any throw. */
+/**
+ * Bulk writes (the Excel update). On Turso every statement is a network round trip, and an interactive transaction with
+ * hundreds of them outlives both Turso's transaction timeout and Vercel's function time limit — the whole update was
+ * rolled back and nothing was saved. Inside deferWrites(), writes made with writeLater() are queued and sent at the end
+ * as ONE atomic batch (a single request). Reads still go straight to the database and see the state before the batch.
+ * Ids that later statements need are handed out by nextId() instead of being read back after each insert.
+ */
+interface DeferCtx { stmts: { sql: string; args: InValue[] }[]; ids: Map<string, number> }
+const deferStore = new AsyncLocalStorage<DeferCtx>();
+export const deferring = () => !!deferStore.getStore();
+
+/** Queues the statement when inside deferWrites(); otherwise runs it now. */
+export async function writeLater(sql: string, ...params: Param[]): Promise<void> {
+  const d = deferStore.getStore();
+  if (d) d.stmts.push({ sql, args: clean(params) });
+  else await run(sql, ...params);
+}
+
+/** Next free value of an integer column, for rows inserted with writeLater() (only valid inside deferWrites()). */
+export async function nextId(table: 'vouchers' | 'batches', col: 'id' | 'voucher_no' = 'id'): Promise<number> {
+  const d = deferStore.getStore();
+  if (!d) throw new Error('nextId() is only available inside deferWrites()');
+  const k = `${table}.${col}`;
+  if (!d.ids.has(k)) d.ids.set(k, Number((await get<{ n: number }>(`SELECT COALESCE(MAX(${col}),0) n FROM ${table}`))!.n));
+  const n = d.ids.get(k)! + 1;
+  d.ids.set(k, n);
+  return n;
+}
+
+export async function deferWrites<T>(fn: () => Promise<T>): Promise<T> {
+  if (store.getStore() || deferStore.getStore()) throw new Error('deferWrites() cannot be nested inside a transaction');
+  const d: DeferCtx = { stmts: [], ids: new Map() };
+  const result = await deferStore.run(d, fn);
+  // One atomic batch. Very large updates are split so a single request stays a reasonable size; each part is atomic,
+  // and the Excel update is safe to repeat (it only adds what is still missing), so a retry finishes an interrupted one.
+  const CHUNK = 4000;
+  for (let i = 0; i < d.stmts.length; i += CHUNK) await client.batch(d.stmts.slice(i, i + CHUNK), 'write');
+  return result;
+}
+
+/** Runs fn inside a transaction (nested calls become savepoints). Rolls back on any throw. Inside deferWrites() the batch is the transaction. */
 export async function tx<T>(fn: () => Promise<T> | T): Promise<T> {
+  if (deferStore.getStore()) return await fn();
   const cur = store.getStore();
   if (!cur) {
     const t = await client.transaction('write');

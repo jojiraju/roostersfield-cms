@@ -7,7 +7,7 @@
  * Batches are inferred from the data: a batch starts at the first chick purchase and ends with the
  * "COGS applied" entry that clears the farm's account.
  */
-import { all, backupLocal, get, run, tx } from '../db.ts';
+import { all, backupLocal, deferring, get, nextId, run, tx, writeLater } from '../db.ts';
 import { config } from '../config.ts';
 import { addAccount, sysAccountId } from '../seed.ts';
 import { CATEGORY_TYPE, addDays, daysBetween, round2, today } from '../util.ts';
@@ -166,7 +166,7 @@ export function groupRows(rows: JournalRow[]): Group[] {
   return groups;
 }
 
-export async function importJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { replace: boolean; userId: number | null; prepared?: boolean; context?: JournalRow[]; append?: boolean }): Promise<ImportReport> {
+export async function importJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { replace: boolean; userId: number | null; prepared?: boolean; context?: JournalRow[]; append?: boolean; ignoreVouchers?: number[] }): Promise<ImportReport> {
   const warnings: string[] = [];
   const warn = (m: string) => { if (warnings.length < 60) warnings.push(m); };
 
@@ -298,18 +298,29 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     /** Append mode: the farm's batches already in the database, with the totals needed to decide open/closed. */
     const existingBatches = async (farm: number): Promise<MemBatch[]> => {
       const out: MemBatch[] = [];
+      // One query per farm (not per batch): on the hosted database every query is a network round trip.
+      // Entries being replaced by this update (corrected amounts) are left out, as they will be deleted.
+      const skip = opts.ignoreVouchers?.length ? ` AND v.id NOT IN (${opts.ignoreVouchers.map(Number).join(',')})` : '';
+      type Agg = { batch_id: number; cost: number; integ: number; cogs: number; hasCogs: number; last: string | null; lastSale: string | null; closedDate: string | null };
+      const aggs = new Map((await all<Agg>(
+        `SELECT e.batch_id,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND COALESCE(e.category,'') NOT IN ('cogs','integration') THEN e.debit-e.credit END),0) cost,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='integration' THEN e.debit-e.credit END),0) integ,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='cogs' THEN e.credit-e.debit END),0) cogs,
+                MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN 1 ELSE 0 END) hasCogs,
+                MAX(v.date) last,
+                MAX(CASE WHEN e.account_id=? THEN v.date END) lastSale,
+                MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN v.date END) closedDate
+         FROM entries e JOIN vouchers v ON v.id=e.voucher_id JOIN batches b ON b.id=e.batch_id WHERE b.farm_id=?${skip} GROUP BY e.batch_id`, wip, wip, wip, wip, salesId, wip, farm)).map((a) => [a.batch_id, a]));
+      const sales = new Map<number, string[]>();
+      for (const s of await all<{ batch_id: number; d: string }>(`SELECT DISTINCT e.batch_id, v.date d FROM entries e JOIN vouchers v ON v.id=e.voucher_id JOIN batches b ON b.id=e.batch_id WHERE b.farm_id=? AND e.account_id=?${skip}`, farm, salesId)) {
+        if (!sales.has(s.batch_id)) sales.set(s.batch_id, []);
+        sales.get(s.batch_id)!.push(s.d);
+      }
       for (const b of await all<{ id: number; batch_no: number; placement_date: string | null; placed_qty: number | null; status: string; closed_date: string | null; notes: string | null }>('SELECT id,batch_no,placement_date,placed_qty,status,closed_date,notes FROM batches WHERE farm_id=? ORDER BY batch_no', farm)) {
         const carry = (b.notes ?? '').startsWith('Cost brought forward');
-        const agg = (await get<{ cost: number; integ: number; cogs: number; hasCogs: number; last: string | null; lastSale: string | null; closedDate: string | null }>(
-          `SELECT COALESCE(SUM(CASE WHEN e.account_id=? AND COALESCE(e.category,'') NOT IN ('cogs','integration') THEN e.debit-e.credit END),0) cost,
-                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='integration' THEN e.debit-e.credit END),0) integ,
-                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='cogs' THEN e.credit-e.debit END),0) cogs,
-                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN 1 ELSE 0 END) hasCogs,
-                  MAX(v.date) last,
-                  MAX(CASE WHEN e.account_id=? THEN v.date END) lastSale,
-                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN v.date END) closedDate
-           FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=?`, wip, wip, wip, wip, salesId, wip, b.id))!;
-        const saleDates = (await all<{ d: string }>('SELECT DISTINCT v.date d FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=? AND e.account_id=?', b.id, salesId)).map((r) => r.d);
+        const agg = aggs.get(b.id) ?? { cost: 0, integ: 0, cogs: 0, hasCogs: 0, last: null, lastSale: null, closedDate: null };
+        const saleDates = sales.get(b.id) ?? [];
         out.push({ farm, no: b.batch_no, placement: carry ? null : b.placement_date, firstDate: b.placement_date ?? '', lastDate: agg.last ?? b.placement_date ?? '', chicksDate: carry ? null : b.placement_date, chicksQty: b.placed_qty ?? 0,
           closed: b.status === 'closed', wasClosed: b.status === 'closed', closedDate: b.closed_date ?? agg.closedDate, hasCogs: !!agg.hasCogs, carry, saleDates, cogs: agg.cogs, cost: agg.cost, integ: agg.integ, lastSale: agg.lastSale, realId: b.id });
       }
@@ -422,16 +433,19 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
       const closed = !isLatest || cleared || stale;
       if (b.realId && !b.isNew) {
         // Append mode, batch already exists: it may close (a newer batch started, or its cost was cleared) but a closed batch is never re-opened.
-        if (b.promoted) await run(`UPDATE batches SET placement_date=?, notes=NULL, partial=0, status=?, closed_date=? WHERE id=?`, b.placement, closed ? 'closed' : 'running', closed ? (b.closedDate ?? b.lastSale ?? b.lastDate) : null, b.realId);
-        else if (!b.wasClosed && closed) await run(`UPDATE batches SET status='closed', closed_date=? WHERE id=?`, b.closedDate ?? b.lastSale ?? b.lastDate, b.realId);
+        if (b.promoted) await writeLater(`UPDATE batches SET placement_date=?, notes=NULL, partial=0, status=?, closed_date=? WHERE id=?`, b.placement, closed ? 'closed' : 'running', closed ? (b.closedDate ?? b.lastSale ?? b.lastDate) : null, b.realId);
+        else if (!b.wasClosed && closed) await writeLater(`UPDATE batches SET status='closed', closed_date=? WHERE id=?`, b.closedDate ?? b.lastSale ?? b.lastDate, b.realId);
         if (b.touchedChicks || b.promoted) recount.push(b.realId);
         continue;
       }
       b.closed = closed;
       const closedDate = closed ? (b.closedDate ?? b.lastSale ?? b.lastDate) : null;
       const note = b.carry ? 'Cost brought forward from before this system (opening balances) — placement date unknown' : closed && !cleared && !isLatest && !b.hasCogs ? 'Closed automatically on import (no cost clearing entry found)' : null;
-      b.realId = (await run('INSERT INTO batches(farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?)',
-        b.farm, b.no, b.carry ? b.firstDate : placement, b.chicksQty > 0 ? Math.round(b.chicksQty) : null, closed ? 'closed' : 'running', closedDate, note, b.carry || b.chicksQty === 0 ? 1 : 0)).id;
+      const cols = [b.farm, b.no, b.carry ? b.firstDate : placement, b.chicksQty > 0 ? Math.round(b.chicksQty) : null, closed ? 'closed' : 'running', closedDate, note, b.carry || b.chicksQty === 0 ? 1 : 0] as const;
+      if (deferring()) { // bulk update: queued with the rest (see deferWrites in db.ts)
+        b.realId = await nextId('batches');
+        await writeLater('INSERT INTO batches(id,farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?,?)', b.realId, ...cols);
+      } else b.realId = (await run('INSERT INTO batches(farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?)', ...cols)).id;
     }
 
     // --- 7. post vouchers
@@ -500,7 +514,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     }
 
     for (const id of recount) {
-      await run(`UPDATE batches SET placed_qty=(SELECT ROUND(SUM(qty)) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0) WHERE id=? AND (SELECT SUM(qty) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0)>0`, id, id, id);
+      await writeLater(`UPDATE batches SET placed_qty=(SELECT ROUND(SUM(qty)) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0) WHERE id=? AND (SELECT SUM(qty) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0)>0`, id, id, id);
     }
 
     // --- 8. link farms to their farmer account
@@ -508,7 +522,7 @@ export async function importJournal(allRows: JournalRow[], tb: Record<string, st
     for (const f of await all<{ id: number; name: string }>('SELECT id,name FROM farms')) {
       const first = norm(f.name).split(' ')[0];
       const match = farmers.find((a) => lev(key(a.name.split(' ')[0]), key(first)) <= 2 && key(first).length > 3 && key(a.name.split(' ')[0]).length > 3);
-      if (match) await run('UPDATE farms SET farmer_account_id=?, farmer_name=? WHERE id=?', match.id, match.name, f.id);
+      if (match) await writeLater('UPDATE farms SET farmer_account_id=?, farmer_name=? WHERE id=?', match.id, match.name, f.id);
     }
 
     // The first synced voucher number follows the sheet; reset the bill-number counter to continue after the Excel bill book.

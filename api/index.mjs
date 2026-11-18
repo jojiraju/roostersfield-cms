@@ -9,7 +9,7 @@ var __export = (target, all2) => {
 import fs from "node:fs";
 import path2 from "node:path";
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/external.js
+// ../node_modules/zod/v3/external.js
 var external_exports = {};
 __export(external_exports, {
   BRAND: () => BRAND,
@@ -121,7 +121,7 @@ __export(external_exports, {
   void: () => voidType
 });
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/util.js
+// ../node_modules/zod/v3/helpers/util.js
 var util;
 (function(util2) {
   util2.assertEqual = (_) => {
@@ -255,7 +255,7 @@ var getParsedType = (data) => {
   }
 };
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/ZodError.js
+// ../node_modules/zod/v3/ZodError.js
 var ZodIssueCode = util.arrayToEnum([
   "invalid_type",
   "invalid_literal",
@@ -373,7 +373,7 @@ ZodError.create = (issues) => {
   return error;
 };
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/locales/en.js
+// ../node_modules/zod/v3/locales/en.js
 var errorMap = (issue, _ctx) => {
   let message;
   switch (issue.code) {
@@ -476,7 +476,7 @@ var errorMap = (issue, _ctx) => {
 };
 var en_default = errorMap;
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/errors.js
+// ../node_modules/zod/v3/errors.js
 var overrideErrorMap = en_default;
 function setErrorMap(map) {
   overrideErrorMap = map;
@@ -485,7 +485,7 @@ function getErrorMap() {
   return overrideErrorMap;
 }
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/parseUtil.js
+// ../node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
   const { data, path: path5, errorMaps, issueData } = params;
   const fullPath = [...path5, ...issueData.path || []];
@@ -595,14 +595,14 @@ var isDirty = (x) => x.status === "dirty";
 var isValid = (x) => x.status === "valid";
 var isAsync = (x) => typeof Promise !== "undefined" && x instanceof Promise;
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/helpers/errorUtil.js
+// ../node_modules/zod/v3/helpers/errorUtil.js
 var errorUtil;
 (function(errorUtil2) {
   errorUtil2.errToObj = (message) => typeof message === "string" ? { message } : message || {};
   errorUtil2.toString = (message) => typeof message === "string" ? message : message?.message;
 })(errorUtil || (errorUtil = {}));
 
-// ../../../../opt/npm-tools/node_modules/zod/v3/types.js
+// ../node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
   constructor(parent, value, path5, key2) {
     this._cachedPath = [];
@@ -3837,7 +3837,7 @@ ZodNaN.create = (params) => {
     ...processCreateParams(params)
   });
 };
-var BRAND = /* @__PURE__ */ Symbol("zod_brand");
+var BRAND = Symbol("zod_brand");
 var ZodBranded = class extends ZodType {
   _parse(input) {
     const { ctx } = this._processInputParams(input);
@@ -4119,7 +4119,7 @@ function verifyToken(token) {
 }
 
 // src/http.ts
-var HANDLED = /* @__PURE__ */ Symbol("handled");
+var HANDLED = Symbol("handled");
 var Router = class {
   routes = [];
   add(method, pattern, handler2, opts = {}) {
@@ -4431,7 +4431,32 @@ var run = async (sql, ...params) => {
   const r = await exec(sql, params);
   return { changes: Number(r.rowsAffected), id: Number(r.lastInsertRowid ?? 0) };
 };
+var deferStore = new AsyncLocalStorage();
+var deferring = () => !!deferStore.getStore();
+async function writeLater(sql, ...params) {
+  const d2 = deferStore.getStore();
+  if (d2) d2.stmts.push({ sql, args: clean(params) });
+  else await run(sql, ...params);
+}
+async function nextId(table, col = "id") {
+  const d2 = deferStore.getStore();
+  if (!d2) throw new Error("nextId() is only available inside deferWrites()");
+  const k = `${table}.${col}`;
+  if (!d2.ids.has(k)) d2.ids.set(k, Number((await get(`SELECT COALESCE(MAX(${col}),0) n FROM ${table}`)).n));
+  const n2 = d2.ids.get(k) + 1;
+  d2.ids.set(k, n2);
+  return n2;
+}
+async function deferWrites(fn) {
+  if (store.getStore() || deferStore.getStore()) throw new Error("deferWrites() cannot be nested inside a transaction");
+  const d2 = { stmts: [], ids: /* @__PURE__ */ new Map() };
+  const result = await deferStore.run(d2, fn);
+  const CHUNK = 4e3;
+  for (let i = 0; i < d2.stmts.length; i += CHUNK) await client.batch(d2.stmts.slice(i, i + CHUNK), "write");
+  return result;
+}
 async function tx(fn) {
+  if (deferStore.getStore()) return await fn();
   const cur = store.getStore();
   if (!cur) {
     const t = await client.transaction("write");
@@ -4678,6 +4703,24 @@ async function postVoucher(v) {
       );
       await run("DELETE FROM entries WHERE voucher_id=?", v.replaceId);
       id2 = v.replaceId;
+    } else if (deferring()) {
+      id2 = await nextId("vouchers");
+      await writeLater(
+        `INSERT INTO vouchers(id,voucher_no,type,date,description,party_id,farm_id,batch_id,bill_no,meta,source,created_by)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        id2,
+        await nextId("vouchers", "voucher_no"),
+        v.type,
+        v.date,
+        v.description,
+        v.partyId ?? null,
+        v.farmId ?? null,
+        v.batchId ?? null,
+        v.billNo ?? null,
+        meta,
+        v.source ?? "app",
+        v.userId ?? null
+      );
     } else {
       const next = (await get("SELECT COALESCE(MAX(voucher_no),0)+1 AS n FROM vouchers")).n;
       id2 = (await run(
@@ -4697,7 +4740,7 @@ async function postVoucher(v) {
       )).id;
     }
     for (const [i, e] of lines.entries()) {
-      await run(
+      await writeLater(
         `INSERT INTO entries(voucher_id,seq,date,account_id,farm_id,batch_id,debit,credit,category,item,qty,weight,rate,narration)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         id2,
@@ -4723,9 +4766,9 @@ async function deleteVoucher(id2) {
   const v = await get("SELECT id,type,batch_id FROM vouchers WHERE id=?", id2);
   if (!v) throw notFound("Transaction not found");
   await tx(async () => {
-    await run("DELETE FROM entries WHERE voucher_id=?", id2);
-    await run("DELETE FROM vouchers WHERE id=?", id2);
-    if (v.type === "close" && v.batch_id) await run(`UPDATE batches SET status='running', closed_date=NULL WHERE id=?`, v.batch_id);
+    await writeLater("DELETE FROM entries WHERE voucher_id=?", id2);
+    await writeLater("DELETE FROM vouchers WHERE id=?", id2);
+    if (v.type === "close" && v.batch_id) await writeLater(`UPDATE batches SET status='running', closed_date=NULL WHERE id=?`, v.batch_id);
   });
 }
 async function getVoucher(id2) {
@@ -6174,26 +6217,34 @@ async function importJournal(allRows, tb, opts) {
     };
     const existingBatches = async (farm) => {
       const out = [];
+      const skip = opts.ignoreVouchers?.length ? ` AND v.id NOT IN (${opts.ignoreVouchers.map(Number).join(",")})` : "";
+      const aggs = new Map((await all(
+        `SELECT e.batch_id,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND COALESCE(e.category,'') NOT IN ('cogs','integration') THEN e.debit-e.credit END),0) cost,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='integration' THEN e.debit-e.credit END),0) integ,
+                COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='cogs' THEN e.credit-e.debit END),0) cogs,
+                MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN 1 ELSE 0 END) hasCogs,
+                MAX(v.date) last,
+                MAX(CASE WHEN e.account_id=? THEN v.date END) lastSale,
+                MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN v.date END) closedDate
+         FROM entries e JOIN vouchers v ON v.id=e.voucher_id JOIN batches b ON b.id=e.batch_id WHERE b.farm_id=?${skip} GROUP BY e.batch_id`,
+        wip,
+        wip,
+        wip,
+        wip,
+        salesId,
+        wip,
+        farm
+      )).map((a) => [a.batch_id, a]));
+      const sales = /* @__PURE__ */ new Map();
+      for (const s of await all(`SELECT DISTINCT e.batch_id, v.date d FROM entries e JOIN vouchers v ON v.id=e.voucher_id JOIN batches b ON b.id=e.batch_id WHERE b.farm_id=? AND e.account_id=?${skip}`, farm, salesId)) {
+        if (!sales.has(s.batch_id)) sales.set(s.batch_id, []);
+        sales.get(s.batch_id).push(s.d);
+      }
       for (const b of await all("SELECT id,batch_no,placement_date,placed_qty,status,closed_date,notes FROM batches WHERE farm_id=? ORDER BY batch_no", farm)) {
         const carry = (b.notes ?? "").startsWith("Cost brought forward");
-        const agg = await get(
-          `SELECT COALESCE(SUM(CASE WHEN e.account_id=? AND COALESCE(e.category,'') NOT IN ('cogs','integration') THEN e.debit-e.credit END),0) cost,
-                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='integration' THEN e.debit-e.credit END),0) integ,
-                  COALESCE(SUM(CASE WHEN e.account_id=? AND e.category='cogs' THEN e.credit-e.debit END),0) cogs,
-                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN 1 ELSE 0 END) hasCogs,
-                  MAX(v.date) last,
-                  MAX(CASE WHEN e.account_id=? THEN v.date END) lastSale,
-                  MAX(CASE WHEN e.account_id=? AND e.category='cogs' THEN v.date END) closedDate
-           FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=?`,
-          wip,
-          wip,
-          wip,
-          wip,
-          salesId,
-          wip,
-          b.id
-        );
-        const saleDates = (await all("SELECT DISTINCT v.date d FROM entries e JOIN vouchers v ON v.id=e.voucher_id WHERE e.batch_id=? AND e.account_id=?", b.id, salesId)).map((r) => r.d);
+        const agg = aggs.get(b.id) ?? { cost: 0, integ: 0, cogs: 0, hasCogs: 0, last: null, lastSale: null, closedDate: null };
+        const saleDates = sales.get(b.id) ?? [];
         out.push({
           farm,
           no: b.batch_no,
@@ -6342,25 +6393,19 @@ async function importJournal(allRows, tb, opts) {
       const stale = daysBetween(b.lastDate, ref) > 60;
       const closed = !isLatest || cleared || stale;
       if (b.realId && !b.isNew) {
-        if (b.promoted) await run(`UPDATE batches SET placement_date=?, notes=NULL, partial=0, status=?, closed_date=? WHERE id=?`, b.placement, closed ? "closed" : "running", closed ? b.closedDate ?? b.lastSale ?? b.lastDate : null, b.realId);
-        else if (!b.wasClosed && closed) await run(`UPDATE batches SET status='closed', closed_date=? WHERE id=?`, b.closedDate ?? b.lastSale ?? b.lastDate, b.realId);
+        if (b.promoted) await writeLater(`UPDATE batches SET placement_date=?, notes=NULL, partial=0, status=?, closed_date=? WHERE id=?`, b.placement, closed ? "closed" : "running", closed ? b.closedDate ?? b.lastSale ?? b.lastDate : null, b.realId);
+        else if (!b.wasClosed && closed) await writeLater(`UPDATE batches SET status='closed', closed_date=? WHERE id=?`, b.closedDate ?? b.lastSale ?? b.lastDate, b.realId);
         if (b.touchedChicks || b.promoted) recount.push(b.realId);
         continue;
       }
       b.closed = closed;
       const closedDate = closed ? b.closedDate ?? b.lastSale ?? b.lastDate : null;
       const note2 = b.carry ? "Cost brought forward from before this system (opening balances) \u2014 placement date unknown" : closed && !cleared && !isLatest && !b.hasCogs ? "Closed automatically on import (no cost clearing entry found)" : null;
-      b.realId = (await run(
-        "INSERT INTO batches(farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?)",
-        b.farm,
-        b.no,
-        b.carry ? b.firstDate : placement,
-        b.chicksQty > 0 ? Math.round(b.chicksQty) : null,
-        closed ? "closed" : "running",
-        closedDate,
-        note2,
-        b.carry || b.chicksQty === 0 ? 1 : 0
-      )).id;
+      const cols = [b.farm, b.no, b.carry ? b.firstDate : placement, b.chicksQty > 0 ? Math.round(b.chicksQty) : null, closed ? "closed" : "running", closedDate, note2, b.carry || b.chicksQty === 0 ? 1 : 0];
+      if (deferring()) {
+        b.realId = await nextId("batches");
+        await writeLater("INSERT INTO batches(id,farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?,?)", b.realId, ...cols);
+      } else b.realId = (await run("INSERT INTO batches(farm_id,batch_no,placement_date,placed_qty,status,closed_date,notes,partial) VALUES(?,?,?,?,?,?,?,?)", ...cols)).id;
     }
     let adjusted = 0, suspenseNet = 0, voucherCount = 0, entryCount = 0, no = 0;
     const typeOf = async (entries, v, cats) => {
@@ -6444,13 +6489,13 @@ async function importJournal(allRows, tb, opts) {
       entryCount += entries.length;
     }
     for (const id2 of recount) {
-      await run(`UPDATE batches SET placed_qty=(SELECT ROUND(SUM(qty)) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0) WHERE id=? AND (SELECT SUM(qty) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0)>0`, id2, id2, id2);
+      await writeLater(`UPDATE batches SET placed_qty=(SELECT ROUND(SUM(qty)) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0) WHERE id=? AND (SELECT SUM(qty) FROM entries WHERE batch_id=? AND category='chicks' AND debit>0)>0`, id2, id2, id2);
     }
     const farmers = await all(`SELECT id,name FROM accounts WHERE category='farmer'`);
     for (const f of await all("SELECT id,name FROM farms")) {
       const first = norm(f.name).split(" ")[0];
       const match = farmers.find((a) => lev(key(a.name.split(" ")[0]), key(first)) <= 2 && key(first).length > 3 && key(a.name.split(" ")[0]).length > 3);
-      if (match) await run("UPDATE farms SET farmer_account_id=?, farmer_name=? WHERE id=?", match.id, match.name, f.id);
+      if (match) await writeLater("UPDATE farms SET farmer_account_id=?, farmer_name=? WHERE id=?", match.id, match.name, f.id);
     }
     void CATEGORY_TYPE;
     void addDays;
@@ -6555,10 +6600,15 @@ async function syncJournal(allRows, tb, opts) {
   }
   const backup = await backupLocal("before-sync");
   const batchesBefore = (await all("SELECT COUNT(*) n FROM batches"))[0].n;
-  const importReport = await tx(async () => {
+  const importReport = await deferWrites(async () => {
     for (const id2 of supersede) await deleteVoucher(id2);
-    return importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true });
+    return importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true, ignoreVouchers: [...supersede] });
   });
+  const st = await get("SELECT MIN(date) a, MAX(date) b FROM vouchers");
+  importReport.firstDate = st.a;
+  importReport.lastDate = st.b;
+  importReport.farms = (await get("SELECT COUNT(*) n FROM farms")).n;
+  importReport.runningBatches = (await get(`SELECT COUNT(*) n FROM batches WHERE status='running'`)).n;
   const batchesAfter = (await all("SELECT COUNT(*) n FROM batches"))[0].n;
   return {
     workbookEntries: wb.size,
@@ -6897,10 +6947,15 @@ async function parseDailyWorkbook(buf) {
   const out = [];
   for (const name of wb.SheetNames) {
     const data = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
-    let h = -1;
-    for (let i = 0; i < Math.min(12, data.length); i++) if (text(data[i]?.[1]) === "DATE" && text(data[i]?.[3]).startsWith("MORTALITY")) {
-      h = i;
-      break;
+    let h = -1, off = 0;
+    for (let i = 0; i < Math.min(12, data.length); i++) {
+      const cells = (data[i] ?? []).map(text);
+      const di = cells.indexOf("DATE"), mi = cells.findIndex((x) => x.startsWith("MORTALITY"));
+      if (di >= 0 && mi > di) {
+        h = i;
+        off = di - 1;
+        break;
+      }
     }
     if (h < 0) continue;
     const head = data[h].map(text);
@@ -6908,7 +6963,7 @@ async function parseDailyWorkbook(buf) {
       const i = head.findIndex((x) => re.test(x));
       return i >= 0 ? i : fb;
     };
-    const c = { date: 1, mort: col(/^MORTALITY/, 3), saleQty: col(/^SALE QTY/, 5), saleWt: col(/^SALE W/, 7), purchase: col(/^PURCHASE/, 8), taken: col(/^TAIKEN|^TAKEN|^USED/, 9), stdFeed: col(/^STD G/, 12), stdWt: col(/^STD W/, 17), stdFcr: col(/^STD FCR/, 18) };
+    const c = { date: 1 + off, mort: col(/^MORTALITY/, 3 + off), saleQty: col(/^SALE QTY/, 5 + off), saleWt: col(/^SALE W/, 7 + off), purchase: col(/^PURCHASE/, 8 + off), taken: col(/^TAIKEN|^TAKEN|^USED/, 9 + off), stdFeed: col(/^STD G/, 12 + off), stdWt: col(/^STD W/, 17 + off), stdFcr: col(/^STD FCR/, 18 + off) };
     const rows = [];
     const std = [];
     let day = 0;

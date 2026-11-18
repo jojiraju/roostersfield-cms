@@ -5,7 +5,7 @@
  *  - entries whose amounts were corrected in the workbook replace the earlier imported version;
  *  - entries typed in the software, and entries that are no longer in the workbook, are never touched.
  */
-import { all, backupLocal, tx } from '../db.ts';
+import { all, backupLocal, deferWrites, get } from '../db.ts';
 import { sysAccountId } from '../seed.ts';
 import { deleteVoucher } from '../services/posting.ts';
 import { cleanRows, farmResolver, groupRows, importJournal } from './core.ts';
@@ -84,10 +84,17 @@ export async function syncJournal(allRows: JournalRow[], tb: Record<string, stri
 
   const backup = await backupLocal('before-sync');
   const batchesBefore = (await all<{ n: number }>('SELECT COUNT(*) n FROM batches'))[0].n;
-  const importReport = await tx(async () => {
+  // All writes go to the database as one atomic batch at the end — on the hosted database a statement-by-statement
+  // transaction took far longer than the request is allowed to run, so the update was rolled back and nothing was added.
+  const importReport = await deferWrites(async () => {
     for (const id of supersede) await deleteVoucher(id);
-    return importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true });
+    return importJournal(deltaRows, tb, { replace: false, userId: opts.userId, prepared: true, context: rows, append: true, ignoreVouchers: [...supersede] });
   });
+  // the report's totals were read before the batch was written: refresh them
+  const st = (await get<{ a: string | null; b: string | null }>('SELECT MIN(date) a, MAX(date) b FROM vouchers'))!;
+  importReport.firstDate = st.a; importReport.lastDate = st.b;
+  importReport.farms = (await get<{ n: number }>('SELECT COUNT(*) n FROM farms'))!.n;
+  importReport.runningBatches = (await get<{ n: number }>(`SELECT COUNT(*) n FROM batches WHERE status='running'`))!.n;
   const batchesAfter = (await all<{ n: number }>('SELECT COUNT(*) n FROM batches'))[0].n;
   return {
     workbookEntries: wb.size, unchanged, added, corrected, keptNotInWorkbook: notInWorkbook.length, newBatches: batchesAfter - batchesBefore,

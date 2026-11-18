@@ -1,4 +1,4 @@
-import { all, get, run, tx } from '../db.ts';
+import { all, deferring, get, nextId, run, tx, writeLater } from '../db.ts';
 import { badRequest, notFound } from '../errors.ts';
 import { round2 } from '../util.ts';
 
@@ -61,6 +61,15 @@ export async function postVoucher(v: VoucherInput): Promise<number> {
       );
       await run('DELETE FROM entries WHERE voucher_id=?', v.replaceId);
       id = v.replaceId;
+    } else if (deferring()) {
+      // bulk import: queued and sent as one batch (see deferWrites in db.ts)
+      id = await nextId('vouchers');
+      await writeLater(
+        `INSERT INTO vouchers(id,voucher_no,type,date,description,party_id,farm_id,batch_id,bill_no,meta,source,created_by)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        id, await nextId('vouchers', 'voucher_no'), v.type, v.date, v.description, v.partyId ?? null, v.farmId ?? null, v.batchId ?? null,
+        v.billNo ?? null, meta, v.source ?? 'app', v.userId ?? null,
+      );
     } else {
       const next = (await get<{ n: number }>('SELECT COALESCE(MAX(voucher_no),0)+1 AS n FROM vouchers'))!.n;
       id = (await run(
@@ -71,7 +80,7 @@ export async function postVoucher(v: VoucherInput): Promise<number> {
       )).id;
     }
     for (const [i, e] of lines.entries()) {
-      await run(
+      await writeLater(
         `INSERT INTO entries(voucher_id,seq,date,account_id,farm_id,batch_id,debit,credit,category,item,qty,weight,rate,narration)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         id, i, v.date, e.accountId, e.farmId ?? v.farmId ?? null, e.batchId ?? v.batchId ?? null, e.debit, e.credit,
@@ -86,10 +95,10 @@ export async function deleteVoucher(id: number) {
   const v = await get<{ id: number; type: string; batch_id: number | null }>('SELECT id,type,batch_id FROM vouchers WHERE id=?', id);
   if (!v) throw notFound('Transaction not found');
   await tx(async () => {
-    await run('DELETE FROM entries WHERE voucher_id=?', id);
-    await run('DELETE FROM vouchers WHERE id=?', id);
+    await writeLater('DELETE FROM entries WHERE voucher_id=?', id);
+    await writeLater('DELETE FROM vouchers WHERE id=?', id);
     // Deleting a batch-closing entry re-opens the batch.
-    if (v.type === 'close' && v.batch_id) await run(`UPDATE batches SET status='running', closed_date=NULL WHERE id=?`, v.batch_id);
+    if (v.type === 'close' && v.batch_id) await writeLater(`UPDATE batches SET status='running', closed_date=NULL WHERE id=?`, v.batch_id);
   });
 }
 
