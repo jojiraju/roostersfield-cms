@@ -132,6 +132,7 @@ function DataCard() {
   const file = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<'update' | 'replace'>('update');
   const [prune, setPrune] = useState(false);
+  const [dedupe, setDedupe] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [err, setErr] = useState('');
@@ -152,7 +153,7 @@ function DataCard() {
   const upload = async (f: File) => {
     setBusy(true); setErr(''); setResult(null);
     try {
-      const q = hasData ? (mode === 'update' ? `?mode=update${prune ? '&prune=1' : ''}` : '?replace=1') : '?replace=0';
+      const q = hasData ? (mode === 'update' ? `?mode=update${prune ? '&prune=1' : ''}${dedupe ? '&dedupe=1' : ''}` : '?replace=1') : '?replace=0';
       const r = await api('/import/excel' + q, { method: 'POST', raw: await f.arrayBuffer() });
       setResult(r); clearCache(); toast(r.mode === 'update' ? 'Excel updated' : 'Excel imported');
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); if (file.current) file.current.value = ''; }
@@ -173,6 +174,7 @@ function DataCard() {
           <div className="col mb-8" style={{ gap: 6 }}>
             <label className="checkbox"><input type="radio" name="impmode" checked={mode === 'update'} onChange={() => setMode('update')} /><span><b>Add new entries</b> — keeps everything already here, adds what is new and applies corrected amounts</span></label>
             {mode === 'update' && <label className="checkbox" style={{ marginLeft: 26 }}><input type="checkbox" checked={prune} onChange={(e) => setPrune(e.target.checked)} /><span>Also remove entries that were <b>deleted or changed</b> in the workbook, so imported entries match it exactly (entries typed in the software are never touched)</span></label>}
+            {mode === 'update' && <label className="checkbox" style={{ marginLeft: 26 }}><input type="checkbox" checked={dedupe} onChange={(e) => setDedupe(e.target.checked)} /><span>Also remove entries <b>typed in the software that are also in the workbook</b> (the same bill entered in both places is otherwise counted twice)</span></label>}
             <label className="checkbox"><input type="radio" name="impmode" checked={mode === 'replace'} onChange={() => setMode('replace')} /><span><b>Replace everything</b> — start over from the workbook, including daily reports (a backup is saved first)</span></label>
           </div>
         )}
@@ -183,8 +185,18 @@ function DataCard() {
           <div className="mt-12">
             <Alert tone="ok">{result.added || result.corrected || result.removed ? <>Added {num(result.added)} new entries{result.corrected ? `, corrected ${num(result.corrected)}` : ''}{result.removed ? `, removed ${num(result.removed)} no longer in the workbook` : ''}{result.newBatches ? `, started ${num(result.newBatches)} new batches` : ''}. {num(result.unchanged)} entries were already up to date.</> : <>Already up to date — nothing new in this workbook.</>}</Alert>
             {result.keptNotInWorkbook > 0 && <div className="small muted mt-8">{num(result.keptNotInWorkbook)} entries here are no longer in the workbook. They were kept, not deleted: {result.details?.notInWorkbook?.slice(0, 6).map((x: string) => x.replace('|', ' · ')).join('; ')}.</div>}
+            {result.removedTyped?.length > 0 && <Alert tone="ok">Removed {num(result.removedTyped.length)} software entries that were also in the workbook.</Alert>}
+            {result.check?.typed?.length > 0 && (() => {
+              const dups = result.check.typed.filter((t: any) => t.duplicateOf);
+              return <details className="small mt-8" open={dups.length > 0}>
+                <summary className={dups.length ? 'neg' : 'muted'}>{num(result.check.typed.length)} entries typed in the software{dups.length ? ` — ${num(dups.length)} are also in the workbook (counted twice)` : ' — none of them are in the workbook'}</summary>
+                <table className="small" style={{ width: '100%' }}><thead><tr><th style={{ textAlign: 'left' }}>Date</th><th style={{ textAlign: 'left' }}>Entry</th><th style={{ textAlign: 'right' }}>Amount</th><th style={{ textAlign: 'left' }}>Same entry in the workbook</th></tr></thead>
+                  <tbody>{result.check.typed.map((t: any) => <tr key={t.id}><td>{fmtDate(t.date)}</td><td>{t.description}</td><td className="tnum" style={{ textAlign: 'right' }}>{inr(t.amount)}</td><td className={t.duplicateOf ? 'neg' : 'muted'}>{t.duplicateOf ?? '—'}</td></tr>)}</tbody></table>
+                {dups.length > 0 && !dedupe && <div className="muted mt-8">Tick “Also remove entries typed in the software that are also in the workbook” and upload again to remove the duplicates.</div>}
+              </details>;
+            })()}
             {result.check && (result.check.mismatches.length === 0
-              ? <div className="small mt-8 pos">✓ All {num(result.check.accounts)} account balances from Excel now match the workbook exactly.{result.check.typedInSoftware ? ` ${num(result.check.typedInSoftware)} entries were typed in the software and come on top of the workbook figures.` : ''}</div>
+              ? <div className="small mt-8 pos">✓ All {num(result.check.accounts)} account balances from Excel now match the workbook exactly.{result.check.typedInSoftware ? ` ${num(result.check.typedInSoftware)} entries typed in the software come on top of the workbook figures (listed above).` : ''}</div>
               : <details className="small mt-8" open><summary className="neg">{num(result.check.mismatches.length)} accounts differ from the workbook</summary>
                   <table className="small" style={{ width: '100%' }}><thead><tr><th style={{ textAlign: 'left' }}>Account</th><th style={{ textAlign: 'right' }}>Workbook</th><th style={{ textAlign: 'right' }}>Software</th></tr></thead>
                     <tbody>{result.check.mismatches.slice(0, 30).map((m: any) => <tr key={m.account}><td>{m.account}</td><td className="tnum" style={{ textAlign: 'right' }}>{inr(m.workbook)}</td><td className="tnum" style={{ textAlign: 'right' }}>{inr(m.software)}</td></tr>)}</tbody></table>

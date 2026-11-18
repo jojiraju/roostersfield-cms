@@ -7,6 +7,7 @@
  */
 import { all, backupLocal, deferWrites, get } from '../db.ts';
 import { sysAccountId } from '../seed.ts';
+import { daysBetween } from '../util.ts';
 import { deleteVoucher } from '../services/posting.ts';
 import { cleanRows, farmResolver, groupRows, importJournal } from './core.ts';
 import type { ImportReport, JournalRow } from './core.ts';
@@ -14,13 +15,13 @@ import type { ImportReport, JournalRow } from './core.ts';
 export interface SyncReport {
   workbookEntries: number; unchanged: number; added: number; corrected: number; removed: number; keptNotInWorkbook: number;
   newBatches: number; importReport: ImportReport | null; backup: string | null; warnings: string[];
-  details: { added: string[]; corrected: string[]; notInWorkbook: string[] }; check: WorkbookCheck;
+  details: { added: string[]; corrected: string[]; notInWorkbook: string[] }; check: WorkbookCheck; removedTyped: string[];
 }
 
 const norm = (s: string) => s.toUpperCase().replace(/\s+/g, ' ').trim();
 const rowKey = (date: string, desc: string, acct: string, dr: number, cr: number) => `${date}|${desc}|${acct}|${dr.toFixed(2)}|${cr.toFixed(2)}`;
 
-export async function syncJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { userId: number | null; prune?: boolean }): Promise<SyncReport> {
+export async function syncJournal(allRows: JournalRow[], tb: Record<string, string>, opts: { userId: number | null; prune?: boolean; removeTypedDuplicates?: boolean }): Promise<SyncReport> {
   const warnings: string[] = [];
   const warn = (m: string) => { if (warnings.length < 60) warnings.push(m); };
   const rows = cleanRows(allRows, warn);
@@ -84,7 +85,7 @@ export async function syncJournal(allRows: JournalRow[], tb: Record<string, stri
   const details = { added: detailsAdded, corrected: detailsCorrected, notInWorkbook: notInWorkbook.slice(0, 100) };
   if (!deltaRows.length && !remove.size) {
     return { workbookEntries: wb.size, unchanged, added: 0, corrected: 0, removed: 0, keptNotInWorkbook: notInWorkbook.length, newBatches: 0, importReport: null, backup: null, warnings,
-      details, check: await checkAgainstWorkbook(rows, tb) };
+      details, ...(await finish(rows, tb, opts)) };
   }
 
   const backup = await backupLocal('before-sync');
@@ -107,8 +108,57 @@ export async function syncJournal(allRows: JournalRow[], tb: Record<string, stri
   return {
     workbookEntries: wb.size, unchanged, added, corrected, removed: opts.prune ? notInWorkbook.length : 0, keptNotInWorkbook: opts.prune ? 0 : notInWorkbook.length,
     newBatches: batchesAfter - batchesBefore, importReport, backup, warnings: [...warnings, ...(importReport?.warnings ?? [])].slice(0, 60),
-    details, check: await checkAgainstWorkbook(rows, tb),
+    details, ...(await finish(rows, tb, opts)),
   };
+}
+
+/** Optionally removes software entries that duplicate a workbook entry, then checks the result against the workbook. */
+async function finish(rows: JournalRow[], tb: Record<string, string>, opts: { removeTypedDuplicates?: boolean }) {
+  let removedTyped: string[] = [];
+  if (opts.removeTypedDuplicates) {
+    const dups = (await typedEntries()).filter((t) => t.duplicateOf);
+    if (dups.length) await deferWrites(async () => { for (const d of dups) await deleteVoucher(d.id); });
+    removedTyped = dups.map((d) => `${d.date} · ${d.description} · ₹${d.amount}`);
+  }
+  return { removedTyped, check: await checkAgainstWorkbook(rows, tb) };
+}
+
+export interface TypedEntry { id: number; date: string; description: string; amount: number; duplicateOf: string | null }
+
+/**
+ * Entries typed in the software, each matched (where possible) to the workbook entry it duplicates: an imported entry within
+ * 3 days that has exactly the same lines (same accounts, same farm for farm costs, same amounts). When the same bill is typed
+ * in the software AND in Excel, it is counted twice once the workbook is uploaded.
+ */
+async function typedEntries(): Promise<TypedEntry[]> {
+  const wip = await sysAccountId('wip'), suspense = await sysAccountId('suspense');
+  const lines = await all<{ vid: number; source: string; date: string; description: string; account_id: number; farm_id: number | null; debit: number; credit: number; narration: string | null }>(
+    `SELECT v.id vid, v.source, v.date, v.description, e.account_id, e.farm_id, e.debit, e.credit, e.narration FROM entries e JOIN vouchers v ON v.id=e.voucher_id ORDER BY v.id, e.id`);
+  const vs = new Map<number, { source: string; date: string; description: string; sig: string[]; amount: number }>();
+  for (const l of lines) {
+    if (l.account_id === suspense && (l.narration ?? '').startsWith('Import difference')) continue;
+    const v = vs.get(l.vid) ?? { source: l.source, date: l.date, description: l.description, sig: [], amount: 0 };
+    v.sig.push(`${l.account_id}|${l.account_id === wip ? l.farm_id ?? '' : ''}|${Number(l.debit).toFixed(2)}|${Number(l.credit).toFixed(2)}`);
+    v.amount += Number(l.debit);
+    vs.set(l.vid, v);
+  }
+  const imported = new Map<string, { id: number; date: string; description: string }[]>();
+  for (const [id, v] of vs) if (v.source === 'import') {
+    const k = v.sig.sort().join(';');
+    if (!imported.has(k)) imported.set(k, []);
+    imported.get(k)!.push({ id, date: v.date, description: v.description });
+  }
+  const claimed = new Set<number>();
+  const out: TypedEntry[] = [];
+  for (const [id, v] of vs) {
+    if (v.source === 'import') continue;
+    const cands = (imported.get(v.sig.sort().join(';')) ?? []).filter((c) => !claimed.has(c.id) && Math.abs(daysBetween(c.date, v.date)) <= 3)
+      .sort((a, b) => Math.abs(daysBetween(a.date, v.date)) - Math.abs(daysBetween(b.date, v.date)));
+    const m = cands[0];
+    if (m) claimed.add(m.id);
+    out.push({ id, date: v.date, description: v.description, amount: Math.round(v.amount * 100) / 100, duplicateOf: m ? `${m.date} · ${m.description}` : null });
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 export interface WorkbookCheck {
@@ -117,6 +167,7 @@ export interface WorkbookCheck {
   mismatches: { account: string; workbook: number; software: number }[];
   /** entries typed in the software (not from Excel) — these are on top of the workbook's figures */
   typedInSoftware: number;
+  typed: TypedEntry[];
 }
 
 /** Balance of every account (each farm separately) from the imported entries, against the same balance worked out from the workbook. */
@@ -142,6 +193,6 @@ async function checkAgainstWorkbook(rows: JournalRow[], tb: Record<string, strin
   const mismatches = [...keys].map((k) => ({ account: k, workbook: r2(xl.get(k) ?? 0), software: r2(app.get(k) ?? 0) }))
     .filter((d) => Math.abs(d.workbook - d.software) >= 1)
     .sort((a, b) => Math.abs(b.workbook - b.software) - Math.abs(a.workbook - a.software));
-  const typedInSoftware = (await get<{ n: number }>(`SELECT COUNT(*) n FROM vouchers WHERE source<>'import'`))!.n;
-  return { accounts: keys.size, mismatches: mismatches.slice(0, 50), typedInSoftware };
+  const typed = await typedEntries();
+  return { accounts: keys.size, mismatches: mismatches.slice(0, 50), typedInSoftware: typed.length, typed: typed.slice(0, 200) };
 }

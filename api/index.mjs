@@ -6600,7 +6600,7 @@ async function syncJournal(allRows, tb, opts) {
       backup: null,
       warnings,
       details,
-      check: await checkAgainstWorkbook(rows, tb)
+      ...await finish(rows, tb, opts)
     };
   }
   const backup = await backupLocal("before-sync");
@@ -6630,8 +6630,49 @@ async function syncJournal(allRows, tb, opts) {
     backup,
     warnings: [...warnings, ...importReport?.warnings ?? []].slice(0, 60),
     details,
-    check: await checkAgainstWorkbook(rows, tb)
+    ...await finish(rows, tb, opts)
   };
+}
+async function finish(rows, tb, opts) {
+  let removedTyped = [];
+  if (opts.removeTypedDuplicates) {
+    const dups = (await typedEntries()).filter((t) => t.duplicateOf);
+    if (dups.length) await deferWrites(async () => {
+      for (const d2 of dups) await deleteVoucher(d2.id);
+    });
+    removedTyped = dups.map((d2) => `${d2.date} \xB7 ${d2.description} \xB7 \u20B9${d2.amount}`);
+  }
+  return { removedTyped, check: await checkAgainstWorkbook(rows, tb) };
+}
+async function typedEntries() {
+  const wip = await sysAccountId("wip"), suspense = await sysAccountId("suspense");
+  const lines = await all(
+    `SELECT v.id vid, v.source, v.date, v.description, e.account_id, e.farm_id, e.debit, e.credit, e.narration FROM entries e JOIN vouchers v ON v.id=e.voucher_id ORDER BY v.id, e.id`
+  );
+  const vs = /* @__PURE__ */ new Map();
+  for (const l of lines) {
+    if (l.account_id === suspense && (l.narration ?? "").startsWith("Import difference")) continue;
+    const v = vs.get(l.vid) ?? { source: l.source, date: l.date, description: l.description, sig: [], amount: 0 };
+    v.sig.push(`${l.account_id}|${l.account_id === wip ? l.farm_id ?? "" : ""}|${Number(l.debit).toFixed(2)}|${Number(l.credit).toFixed(2)}`);
+    v.amount += Number(l.debit);
+    vs.set(l.vid, v);
+  }
+  const imported = /* @__PURE__ */ new Map();
+  for (const [id2, v] of vs) if (v.source === "import") {
+    const k = v.sig.sort().join(";");
+    if (!imported.has(k)) imported.set(k, []);
+    imported.get(k).push({ id: id2, date: v.date, description: v.description });
+  }
+  const claimed = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const [id2, v] of vs) {
+    if (v.source === "import") continue;
+    const cands = (imported.get(v.sig.sort().join(";")) ?? []).filter((c) => !claimed.has(c.id) && Math.abs(daysBetween(c.date, v.date)) <= 3).sort((a, b) => Math.abs(daysBetween(a.date, v.date)) - Math.abs(daysBetween(b.date, v.date)));
+    const m = cands[0];
+    if (m) claimed.add(m.id);
+    out.push({ id: id2, date: v.date, description: v.description, amount: Math.round(v.amount * 100) / 100, duplicateOf: m ? `${m.date} \xB7 ${m.description}` : null });
+  }
+  return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
 async function checkAgainstWorkbook(rows, tb) {
   const { isFarmAccount, resolveFarmKey, farmNames } = farmResolver(rows, tb);
@@ -6655,8 +6696,8 @@ async function checkAgainstWorkbook(rows, tb) {
   const keys = /* @__PURE__ */ new Set([...xl.keys(), ...app.keys()]);
   const r2 = (n2) => Math.round(n2 * 100) / 100;
   const mismatches = [...keys].map((k) => ({ account: k, workbook: r2(xl.get(k) ?? 0), software: r2(app.get(k) ?? 0) })).filter((d2) => Math.abs(d2.workbook - d2.software) >= 1).sort((a, b) => Math.abs(b.workbook - b.software) - Math.abs(a.workbook - a.software));
-  const typedInSoftware = (await get(`SELECT COUNT(*) n FROM vouchers WHERE source<>'import'`)).n;
-  return { accounts: keys.size, mismatches: mismatches.slice(0, 50), typedInSoftware };
+  const typed = await typedEntries();
+  return { accounts: keys.size, mismatches: mismatches.slice(0, 50), typedInSoftware: typed.length, typed: typed.slice(0, 200) };
 }
 
 // src/importer/excel.ts
@@ -6790,7 +6831,7 @@ function insightRoutes(r) {
     if (buf.length < 1e3) throw badRequest("That file looks empty. Choose the Rooster\u2019s Field Excel workbook (.xlsx).");
     const replace = query.get("replace") === "1";
     const hasData = ((await get(`SELECT COUNT(*) n FROM vouchers`))?.n ?? 0) > 0;
-    if (hasData && !replace && query.get("mode") === "update") return { mode: "update", ...await syncWorkbook(buf, { userId: user.sub, prune: query.get("prune") === "1" }) };
+    if (hasData && !replace && query.get("mode") === "update") return { mode: "update", ...await syncWorkbook(buf, { userId: user.sub, prune: query.get("prune") === "1", removeTypedDuplicates: query.get("dedupe") === "1" }) };
     if (hasData && !replace) throw badRequest("There is already data in the system. Choose \u201CUpdate\u201D to add the new entries, or \u201CReplace everything\u201D to start over (a backup is taken first).");
     return await importWorkbook(buf, { replace, userId: user.sub });
   }, { admin: true, raw: true });

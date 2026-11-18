@@ -67,7 +67,7 @@ export async function importWorkbook(buf: Buffer, opts: { replace: boolean; user
   return await importJournal(rows, tb, opts);
 }
 
-export async function syncWorkbook(buf: Buffer, opts: { userId: number | null; prune?: boolean }): Promise<SyncReport> {
+export async function syncWorkbook(buf: Buffer, opts: { userId: number | null; prune?: boolean; removeTypedDuplicates?: boolean }): Promise<SyncReport> {
   const { rows, tb } = await parseWorkbook(buf);
   if (!rows.length) throw badRequest('No journal rows were found in the JOURNALS sheet.');
   return await syncJournal(rows, tb, opts);
